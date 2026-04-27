@@ -10,6 +10,7 @@
 /script_grave/
 /oryx-build-commands.txt
 /environment.yml.bak
+/temp/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

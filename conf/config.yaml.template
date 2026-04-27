@@ -1,6 +1,10 @@
 tar_gene: GENE
 gse_id: GSE123456
-data_dir: ..\data
+data_dir: data
+group_select_col: source_name_ch1
+control_label: ['control']
+fib_label: ['CCl4']
+analysis_mode: "diff" 
 storage: true
 strict_mode: false
 debug: false

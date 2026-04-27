@@ -6,10 +6,17 @@ import time
 
 from modules import DataLoader, Analyzer, FigurePlotter
 
-from utils import loggers, Config, DataHandler, FIGURE_DIR
+from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR
 
+# 创建配置文件
+if not os.path.exists(os.path.join(CONFIG_DIR, "config.yaml")):
+    config_path = os.path.join(CONFIG_DIR, "config.yaml")
+    with open(config_path, "w") as f:
+        with open(os.path.join(CONFIG_DIR, "config.yaml.template"), "r") as template:
+            f.write(template.read())
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
+# 主函数
+@hydra.main(version_base=None, config_path=CONFIG_DIR, config_name="config")
 def main(cfg: Config):
     # 初始化
     logging.getLogger().setLevel(logging.INFO)
@@ -35,10 +42,23 @@ def main(cfg: Config):
         logger.info("数据获取完成")
     time.sleep(3)
 
-    # 相关性分析
-    calculater = Analyzer.create(cfg, data)
-    data.gene_corr_table = calculater.calculate()
-    logger.info("相关性分析完成")
+    # 分析
+    if cfg.analysis_mode == "corr" and os.path.exists(os.path.join(data_dir, "pkl", f"{cfg.gse_id}_correlation_summary.pkl")) and not cfg.debug:
+        logger.info("发现基因相关性分析结果，跳过计算")
+    elif cfg.analysis_mode == "diff" and os.path.exists(os.path.join(data_dir, "pkl", f"{cfg.gse_id}_differential_summary.pkl")) and not cfg.debug:
+        logger.info("发现基因差异分析结果，跳过计算")
+    else:
+        logger.info("开始分析")
+        calculater = Analyzer.create(cfg, data)
+        result = calculater.calculate()
+        if cfg.analysis_mode == "corr":
+            data.gene_corr_table = result
+        elif cfg.analysis_mode == "diff":
+            data.gene_diff_table = result
+        else:
+            logger.error(f"未知分析模式：{cfg.analysis_mode}，结果未保存")
+            raise ValueError(f"未知分析模式：{cfg.analysis_mode}，结果未保存")
+        logger.info("分析完成")
     time.sleep(3)
 
     # 绘图

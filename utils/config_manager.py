@@ -10,6 +10,10 @@ from utils.paths import DATA_DIR
 class Config:
     tar_gene: str
     gse_id: str
+    group_select_col: Optional[str] = "source_name_ch1"
+    control_label: Optional[List[str]] = field(default_factory=lambda: ["control"])
+    fib_label: Optional[List[str]] = field(default_factory=lambda: ["CCl4"])
+    analysis_mode: str = "diff"
     data_dir: str = DATA_DIR
     storage: bool = True
     strict_mode: bool = False
@@ -23,6 +27,7 @@ class Config:
 class DataHandler:
     meta_matrix_pack: Optional[dict] = None
     gene_corr_table: Optional[pd.DataFrame] = None
+    gene_diff_table: Optional[pd.DataFrame] = None
 
 
 cs = ConfigStore.instance()
