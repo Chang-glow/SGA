@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import requests
 import GEOparse
 from typing import Optional, Dict
@@ -37,14 +38,14 @@ class DataLoader:
             gse = self._get_gse()
             self._gse = gse
             self._download_data = self._user_selection_flow(gse)
+            if not self._download_data:
+                raise RuntimeError("未获取到补充矩阵文件，请检查 GEO 数据集是否包含匹配的 matrix/count 文件，并确保按提示选择文件")
             self.get_meta(gse)
             data = self._build_pack()
             if not data:
                 raise RuntimeError("数据未下载创建")
-            if data:
-                return data
-        else:
-            return self._data
+            return data
+        return self._data
 
     def download_geo_data(self, url: str) -> Optional[str]:
         """从GEO下载所需数据
@@ -75,9 +76,7 @@ class DataLoader:
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
 
-            with open(local_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            self._save_response_to_file(response, local_path)
             DataLoader._logger.info(f"{local_path}下载完成")
             return local_path
         except Exception as e:
@@ -85,6 +84,35 @@ class DataLoader:
             if os.path.exists(local_path):
                 os.remove(local_path)
             return None
+
+    def _save_response_to_file(self, response, local_path):
+        total_length = response.headers.get('content-length')
+        downloaded = 0
+        if total_length is not None:
+            total_length = int(total_length)
+
+        with open(local_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                self._print_download_progress(downloaded, total_length)
+
+        sys.stdout.write("\n")
+
+    def _print_download_progress(self, downloaded, total_length):
+        if total_length is not None:
+            percent = int(downloaded / total_length * 100)
+            bar_len = 30
+            filled = int(bar_len * percent / 100)
+            bar = '#' * filled + '-' * (bar_len - filled)
+            sys.stdout.write(
+                f"\r下载进度: [{bar}] {percent}% ({downloaded // 1024}KB/{total_length // 1024}KB)"
+            )
+        else:
+            sys.stdout.write(f"\r已下载 {downloaded // 1024}KB")
+        sys.stdout.flush()
 
     def _get_gse(self) -> GEOparse.GEOTypes.GSE:
         """获取GEO数据包
@@ -267,20 +295,24 @@ class DataLoader:
         if not meta.empty:
             DataLoader._logger.info(f"元数据提取成功，样本数{len(meta)}")
 
-        if not self.cfg.group_select_col:
-            # 手动选择meta中的需要的title
-            selected_res = self._manual_group_select(meta)
-            selected_group_indices = selected_res["group_indices"]
-            unique_groups = selected_res["unique_groups"]
-            current_col = selected_res["current_col"]
-            # 若正常选中矩阵序号则过滤meta
-            if isinstance(selected_group_indices, list):
-                target_groups = [unique_groups[i] for i in selected_group_indices]
-                condition = meta[current_col].isin(target_groups)
-                self._chosen_meta = meta[condition]
-                return
+        if self.cfg.analysis_mode == "diff":
+            if not self.cfg.group_select_col:
+                # 手动选择meta中的需要的title
+                selected_res = self._manual_group_select(meta)
+                selected_group_indices = selected_res["group_indices"]
+                unique_groups = selected_res["unique_groups"]
+                current_col = selected_res["current_col"]
+                # 若正常选中矩阵序号则过滤meta
+                if isinstance(selected_group_indices, list):
+                    target_groups = [unique_groups[i] for i in selected_group_indices]
+                    condition = meta[current_col].isin(target_groups)
+                    self._chosen_meta = meta[condition]
+                    return
 
-        self._group_division(meta)
+            self._group_division(meta)
+        else:
+            DataLoader._logger.info("当前为相关性分析模式，跳过自动分组流程")
+            self._chosen_meta = meta.copy()
 
 
     def _manual_group_select(self, meta, group_label: str = None, default_col: str = None) -> dict:
@@ -353,9 +385,12 @@ class DataLoader:
         downloaded_data = self._download_data
         exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
 
+        if downloaded_data is None:
+            raise RuntimeError("未获取到下载的数据文件，无法构建数据包")
+
         try:
             # 如果有分组信息，为 meta 添加 group 列
-            if hasattr(self, '_group_mapping') and hasattr(self, '_group_col'):
+            if self._group_col is not None and self._group_mapping:
                 def map_group(val):
                     if val in self._group_mapping.get('Control', []):
                         return 'Control'
@@ -403,11 +438,12 @@ class DataLoader:
                 if debug:
                     self._check_target_gene(df_temp, tar_gene)
 
-            # 然后将 group_info 也加入 pack
-            meta_matrix_pack['group_info'] = {
-                'group_col': self._group_col,
-                'mapping': self._group_mapping
-            }
+            # 如果存在分组信息，则加入 group_info
+            if self._group_col is not None and self._group_mapping:
+                meta_matrix_pack['group_info'] = {
+                    'group_col': self._group_col,
+                    'mapping': self._group_mapping
+                }
 
             if not meta_matrix_pack:
                 raise Exception("没有获取到任何有效矩阵")
