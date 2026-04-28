@@ -49,7 +49,16 @@ def fetch_gene_vector(df, tar_gene) -> pd.Series:
     # 3. 后处理：清洗聚合
     if vector is not None:
         # 只保留数值列，剔除掉注释列
-        vector = vector.select_dtypes(include=[np.number])
+        numeric_df = vector.select_dtypes(include=[np.number])
+        annotation_keywords = [
+            'ENSEMBL', 'ENTREZID', 'SYMBOL', 'GENE', 'PROBEID',
+            'ID_REF', 'TARGETID', 'DESCRIPTION', 'GENENAME'
+        ]
+        sample_columns = [
+            col for col in numeric_df.columns
+            if not any(keyword in str(col).upper() for keyword in annotation_keywords)
+        ]
+        vector = numeric_df[sample_columns]
 
         # 处理多行情况
         if isinstance(vector, pd.DataFrame):
@@ -432,31 +441,40 @@ class Analyzer(ABC):
         else:
             expr_df = expr_df.loc[:, common_samples]
 
-        control_samples = expr_df[control_samples]
-        fib_samples = expr_df[fib_samples]
+        control_values = expr_df[control_samples].to_numpy(dtype=float)
+        fib_values = expr_df[fib_samples].to_numpy(dtype=float)
 
-        # 4.计算统计量
-        results_list = []
-        for gene in expr_df.index:
-            c_vals = control_samples.loc[gene].dropna()
-            f_vals = fib_samples.loc[gene].dropna()
-            if len(c_vals) < 3 or len(f_vals) < 3:
-                continue
-            # t 检验
-            _, p_val = scipy.stats.ttest_ind(c_vals, f_vals, equal_var=False)
-            # log2FC 均值差
-            if self._is_log(expr_df):
-                log2fc = f_vals.mean() - c_vals.mean()
-            else:
-                log2fc = np.log2(f_vals.mean() + 1) - np.log2(c_vals.mean() + 1)
-            results_list.append({
-                "Gene": gene,
-                "log2FC": log2fc,
-                "P_value": p_val
-            })
+        self._logger.info("开始差异表达统计计算，可能需要一些时间")
 
-        # 5. FDR校正
-        _diff_result = pd.DataFrame(results_list)
+        control_count = np.sum(~np.isnan(control_values), axis=1)
+        fib_count = np.sum(~np.isnan(fib_values), axis=1)
+        valid_mask = (control_count >= 3) & (fib_count >= 3)
+
+        if not np.any(valid_mask):
+            self._logger.error("没有足够的样本值进行差异分析")
+            raise ValueError("没有足够的样本值进行差异分析")
+
+        ttest_result = scipy.stats.ttest_ind(
+            control_values,
+            fib_values,
+            axis=1,
+            equal_var=False,
+            nan_policy='omit'
+        )
+
+        if self._is_log(expr_df):
+            log2fc = np.nanmean(fib_values, axis=1) - np.nanmean(control_values, axis=1)
+        else:
+            log2fc = np.log2(np.nanmean(fib_values, axis=1) + 1) - np.log2(np.nanmean(control_values, axis=1) + 1)
+
+        _diff_result = pd.DataFrame({
+            "Gene": expr_df.index,
+            "log2FC": log2fc,
+            "P_value": ttest_result.pvalue
+        })
+        _diff_result = _diff_result.loc[valid_mask].reset_index(drop=True)
+
+        # 4. FDR校正
         _, _diff_result['padj'] = fdrcorrection(_diff_result['P_value'].fillna(1))
 
         self._diff_result = _diff_result

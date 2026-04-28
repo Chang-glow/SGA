@@ -223,6 +223,24 @@ class FigurePlotter(ABC):
                 labels.append(None)
         return pd.Series(labels, index=sample_names)
 
+    def _get_sample_columns(self, df: pd.DataFrame) -> list:
+        """识别表达矩阵中的样本列，排除注释列和检测 p-value 列"""
+        sample_columns = []
+        for col in df.columns:
+            if isinstance(col, str):
+                lowered = col.lower()
+                if any(keyword in lowered for keyword in [
+                    'ensembl', 'entrezid', 'symbol', 'genename', 'probeid',
+                    'id_ref', 'targetid', 'gene', 'description'
+                ]):
+                    continue
+                if 'detection' in lowered and 'pval' in lowered:
+                    continue
+                sample_columns.append(col)
+            else:
+                sample_columns.append(col)
+        return sample_columns
+
     def _prepare_diff_data(self) -> dict:
         """准备差异分析的箱线图数据"""
         # 获取数据矩阵
@@ -235,13 +253,18 @@ class FigurePlotter(ABC):
 
         # 分组标签
         group_col = 'group' if 'group' in meta.columns else 'group_label'
+        x = None
         try:
             x = meta.loc[y.index, group_col]
         except KeyError:
             self._logger.warning("样本名与元数据索引不匹配，尝试按原始元数据顺序映射组标签")
             full_meta = self._meta_matrix_pack.get('meta_full')
-            if full_meta is not None and len(y.index) == len(full_meta.index):
-                x = pd.Series(full_meta[group_col].values, index=y.index)
+            sample_columns = self._get_sample_columns(expr_df)
+
+            if full_meta is not None and len(sample_columns) == len(full_meta.index):
+                rename_map = {old: new for old, new in zip(sample_columns, full_meta.index.astype(str))}
+                y = y.rename(index=rename_map)
+                x = meta.reindex(y.index)[group_col]
             else:
                 x = self._infer_group_labels_from_sample_names(y.index)
 
