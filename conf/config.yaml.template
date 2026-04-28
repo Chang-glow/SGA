@@ -1,9 +1,11 @@
+version: "1.2"
 tar_gene: GENE
 gse_id: GSE123456
 data_dir: data
 group_select_col: source_name_ch1
 control_label: ['control']
-fib_label: ['CCl4']
+exp_label: ['CCl4']
+exp_type: "Fibrosis"
 analysis_mode: "diff" 
 storage: true
 strict_mode: false

@@ -137,7 +137,7 @@ class DataLoader:
         # 读取配置
         group_select_col = self.cfg.group_select_col
         control_label = self.cfg.control_label
-        fib_label = self.cfg.fib_label
+        exp_label = self.cfg.exp_label
 
         def _normalize_labels(label):
             if label is None:
@@ -147,7 +147,7 @@ class DataLoader:
             return [str(label).lower()]
 
         control_labels = _normalize_labels(control_label)
-        fib_labels = _normalize_labels(fib_label)
+        exp_labels = _normalize_labels(exp_label)
 
         if group_select_col not in meta.columns:
             DataLoader._logger.warning(f"未在元数据中找到指定的分组列 '{group_select_col}'，进入交互式分组流程")
@@ -159,22 +159,23 @@ class DataLoader:
             g for g in unique_groups
             if any(label in str(g).lower() for label in control_labels)
         ]
-        fib_groups = [
+        exp_groups = [
             g for g in unique_groups
-            if any(label in str(g).lower() for label in fib_labels)
+            if any(label in str(g).lower() for label in exp_labels)
         ]
 
-        if control_groups and fib_groups:
-            self._chosen_meta = meta[meta[group_select_col].isin(control_groups + fib_groups)]
-            DataLoader._logger.info(f"自动分组成功，控制组标签: {control_groups}，纤维化组标签: {fib_groups}")
+        if control_groups and exp_groups:
+            self._chosen_meta = meta[meta[group_select_col].isin(control_groups + exp_groups)]
+            exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
+            DataLoader._logger.info(f"自动分组成功,控制组标签: {control_groups},实验组标签: {exp_groups}")
             self._group_mapping = {
                 'Control': control_groups,
-                'Fibrosis': fib_groups
+                exp_type: exp_groups
             }
             self._group_col = group_select_col
             return
 
-        DataLoader._logger.warning("未能自动识别到控制组或纤维化组标签，进入交互式分组流程")
+        DataLoader._logger.warning("未能自动识别到组别标签，进入交互式分组流程")
         self._manual_group_division(meta)
 
     def _manual_group_division(self, meta) -> None:
@@ -189,24 +190,25 @@ class DataLoader:
         group_col = res1["current_col"]
 
         # 再次调用，使用第一次的默认列
-        res2 = self._manual_group_select(meta, group_label="Fibrosis", default_col=group_col)
-        fib_valuas = [res2["unique_groups"][i] for i in res2["group_indices"]]
+        res2 = self._manual_group_select(meta, group_label="Experiment", default_col=group_col)
+        exp_valuas = [res2["unique_groups"][i] for i in res2["group_indices"]]
 
         # 若切换列则warning警告
         if res2["current_col"] != group_col:
             DataLoader._logger.warning(f"分组列在两次选择中不一致，第一次选择了'{group_col}'，第二次选择了'{res2['current_col']}'，请确保选择的列包含所需的分组信息")
 
-        # 检查是否至少选择了一个控制组标签和一个纤维化组标签
-        if not control_valuas or not fib_valuas:
+        # 检查是否至少选择了一个控制组标签和一个实验组标签
+        if not control_valuas or not exp_valuas:
             DataLoader._logger.error("未选择任何分组标签，无法进行分组")
-            raise ValueError("至少需要选择一个控制组标签和一个纤维化组标签")
+            raise ValueError("至少需要选择一个控制组标签和一个实验组标签")
         
         # 最后过滤meta
+        exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
         self._group_col = group_col
-        self._chosen_meta = meta[meta[group_col].isin(control_valuas + fib_valuas)]
+        self._chosen_meta = meta[meta[group_col].isin(control_valuas + exp_valuas)]
         self._group_mapping = {
             'Control': control_valuas,
-            'Fibrosis': fib_valuas
+            exp_type: exp_valuas
         }
 
     def _user_selection_flow(self, gse) -> None:
@@ -308,7 +310,7 @@ class DataLoader:
 
             # 手动选择所需内容
             selected_group_indices = parse_user_input(
-                prompt="请输入需要的内容序号(如1:8,11,输入'm'重新选择列):",
+                prompt=f"请输入 {group_label} 组需要的内容序号(如1:8,11,输入'm'重新选择列):",
                 max_length=len(unique_groups),
                 whitelist="m"
             )
@@ -349,6 +351,7 @@ class DataLoader:
 
         chosen_meta = self._chosen_meta
         downloaded_data = self._download_data
+        exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
 
         try:
             # 如果有分组信息，为 meta 添加 group 列
@@ -356,8 +359,8 @@ class DataLoader:
                 def map_group(val):
                     if val in self._group_mapping.get('Control', []):
                         return 'Control'
-                    elif val in self._group_mapping.get('Fibrosis', []):
-                        return 'Fibrosis'
+                    elif val in self._group_mapping.get(exp_type, []):
+                        return exp_type
                     else:
                         return None
                 chosen_meta['group'] = chosen_meta[self._group_col].apply(map_group)

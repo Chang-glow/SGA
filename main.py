@@ -1,4 +1,5 @@
 import os
+import sys
 
 import hydra
 import logging
@@ -7,6 +8,48 @@ import time
 from modules import DataLoader, Analyzer, FigurePlotter
 
 from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR
+
+
+def _read_cfg_version(config_path: str) -> str | None:
+    """Read the version field from a simple YAML config file."""
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("version:"):
+                    _, value = line.split(":", 1)
+                    value = value.strip()
+                    if not value:
+                        return None
+                    if (value.startswith('"') and value.endswith('"')) or (
+                        value.startswith("'") and value.endswith("'")
+                    ):
+                        return value[1:-1]
+                    return value
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def _print_cfg_version_and_exit() -> None:
+    """Print the version stored in config and exit before Hydra initializes."""
+    config_path = os.path.join(CONFIG_DIR, "config.yaml")
+    if not os.path.exists(config_path):
+        config_path = os.path.join(CONFIG_DIR, "config.yaml.template")
+
+    version = _read_cfg_version(config_path)
+    if version is None:
+        print("No version field defined in config.")
+        sys.exit(0)
+
+    print(version)
+    sys.exit(0)
+
+
+if len(sys.argv) > 1 and sys.argv[1] in {"version", "--version", "-v"}:
+    _print_cfg_version_and_exit()
 
 # 创建配置文件
 if not os.path.exists(os.path.join(CONFIG_DIR, "config.yaml")):

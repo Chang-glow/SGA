@@ -10,9 +10,11 @@ from utils.paths import DATA_DIR
 class Config:
     tar_gene: str
     gse_id: str
+    version: str = "1.0"
     group_select_col: Optional[str] = "source_name_ch1"
     control_label: Optional[List[str]] = field(default_factory=lambda: ["control"])
-    fib_label: Optional[List[str]] = field(default_factory=lambda: ["CCl4"])
+    exp_label: Optional[List[str]] = field(default_factory=lambda: ["CCl4"])
+    exp_type: Optional[str] = "Fibrosis"
     analysis_mode: str = "diff"
     data_dir: str = DATA_DIR
     storage: bool = True

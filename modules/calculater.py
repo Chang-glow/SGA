@@ -410,14 +410,15 @@ class Analyzer(ABC):
             expr_df = expr_df['matrix_aligned']
 
         # 2. 根据group拆分
+        exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
         control_samples = meta[meta['group'] == 'Control'].index.tolist()
-        fib_samples = meta[meta['group'] == 'Fibrosis'].index.tolist()
-        if not control_samples or not fib_samples:
-            self._logger.error("分组信息不完整,无法找到Control或Fibrosis组的样本")
-            raise ValueError("分组信息不完整,无法找到Control或Fibrosis组的样本")
+        exp_samples = meta[meta['group'] == exp_type].index.tolist()
+        if not control_samples or not exp_samples:
+            self._logger.error(f"分组信息不完整,无法找到Control或{exp_type}组的样本")
+            raise ValueError(f"分组信息不完整,无法找到Control或{exp_type}组的样本")
         
         # 3.对齐矩阵样本
-        common_samples = list(dict.fromkeys(control_samples + fib_samples))
+        common_samples = list(dict.fromkeys(control_samples + exp_samples))
 
         # 如果样本名在行索引中而不是列名中，则转置矩阵
         if set(common_samples).issubset(expr_df.index):
@@ -433,22 +434,22 @@ class Analyzer(ABC):
                     expr_df = expr_df.loc[:, common_samples]
                     self._logger.info("已按原始元数据顺序将表达矩阵列映射为 GSM 样本名")
                 else:
-                    self._logger.error("样本名与原始元数据顺序无法完全对应，无法重新映射表达矩阵")
+                    self._logger.error("样本名与原始元数据顺序无法完全对应,无法重新映射表达矩阵")
                     raise KeyError("样本名与表达矩阵列不匹配，请检查数据和元数据")
             else:
-                self._logger.error("无法从表达矩阵列名中推断Control/Fibrosis分组，请检查数据")
+                self._logger.error("无法从表达矩阵列名中推断Control/Experiment分组，请检查数据")
                 raise KeyError("样本名与表达矩阵列不匹配，请检查数据和元数据")
         else:
             expr_df = expr_df.loc[:, common_samples]
 
         control_values = expr_df[control_samples].to_numpy(dtype=float)
-        fib_values = expr_df[fib_samples].to_numpy(dtype=float)
+        exp_values = expr_df[exp_samples].to_numpy(dtype=float)
 
         self._logger.info("开始差异表达统计计算，可能需要一些时间")
 
         control_count = np.sum(~np.isnan(control_values), axis=1)
-        fib_count = np.sum(~np.isnan(fib_values), axis=1)
-        valid_mask = (control_count >= 3) & (fib_count >= 3)
+        exp_count = np.sum(~np.isnan(exp_values), axis=1)
+        valid_mask = (control_count >= 3) & (exp_count >= 3)
 
         if not np.any(valid_mask):
             self._logger.error("没有足够的样本值进行差异分析")
@@ -456,16 +457,16 @@ class Analyzer(ABC):
 
         ttest_result = scipy.stats.ttest_ind(
             control_values,
-            fib_values,
+            exp_values,
             axis=1,
             equal_var=False,
             nan_policy='omit'
         )
 
         if self._is_log(expr_df):
-            log2fc = np.nanmean(fib_values, axis=1) - np.nanmean(control_values, axis=1)
+            log2fc = np.nanmean(exp_values, axis=1) - np.nanmean(control_values, axis=1)
         else:
-            log2fc = np.log2(np.nanmean(fib_values, axis=1) + 1) - np.log2(np.nanmean(control_values, axis=1) + 1)
+            log2fc = np.log2(np.nanmean(exp_values, axis=1) + 1) - np.log2(np.nanmean(control_values, axis=1) + 1)
 
         _diff_result = pd.DataFrame({
             "Gene": expr_df.index,

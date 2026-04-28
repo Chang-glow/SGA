@@ -207,8 +207,22 @@ class FigurePlotter(ABC):
                 return val
         raise KeyError("No expression matrix found in _meta_matrix_pack")
 
-    def _infer_group_labels_from_sample_names(self, sample_names):
-        """从表达矩阵列名推断组标签"""
+    def _infer_group_labels_from_sample_names(self, sample_names: pd.Index, exp_type: str = 'Fibrosis') -> pd.Series:
+        """从表达矩阵列名推断组标签
+        
+        Args:
+            sample_names: 表达矩阵的列索引，通常是样本名
+            exp_type: 实验组的标签前缀，默认为'Fibrosis'
+        
+        Returns:
+            pd.Series: 包含组标签的Series，索引与输入的sample_names相同
+        
+        Assumes:
+            - Control组样本名以'N'开头（如N1, N2, ...）
+            - 实验组样本名以'D'开头（如D1, D2, ...）
+        """
+        if self.cfg.exp_type:
+            exp_type = self.cfg.exp_type
         labels = []
         for name in sample_names:
             if not isinstance(name, str) or len(name) < 2:
@@ -218,7 +232,7 @@ class FigurePlotter(ABC):
             if prefix == 'N':
                 labels.append('Control')
             elif prefix == 'D':
-                labels.append('Fibrosis')
+                labels.append(exp_type)
             else:
                 labels.append(None)
         return pd.Series(labels, index=sample_names)
@@ -241,8 +255,11 @@ class FigurePlotter(ABC):
                 sample_columns.append(col)
         return sample_columns
 
-    def _prepare_diff_data(self) -> dict:
+    def _prepare_diff_data(self, exp_type: str = 'Fibrosis') -> dict:
         """准备差异分析的箱线图数据"""
+        if self.cfg.exp_type:
+            exp_type = self.cfg.exp_type
+        
         # 获取数据矩阵
         gene = self.cfg.tar_gene
         meta = self._meta_matrix_pack['meta']
@@ -273,19 +290,22 @@ class FigurePlotter(ABC):
         x, y = x[valid], y[valid]
 
         # check
-        group_vals = [y[x == "Control"], y[x == "Fibrosis"]]
+        group_vals = [y[x == "Control"], y[x == exp_type]]
         _, p_value = ttest_ind(*group_vals, equal_var=False)
         self._logger.info(f"准备差异分析数据完成,组间t检验p值:{p_value:.4e}")
 
         return {
             'x': x, 'y': y, 'p_value': p_value,
-            'title': f'{gene} expression in Control vs Fibrosis'
+            'title': f'{gene} expression in Control vs {exp_type}'
         }
 
-    def _save_box_plot(self, x, y, p_value, title) -> None:
+    def _save_box_plot(self, x, y, p_value, title, exp_type='Fibrosis') -> None:
         """画箱线图并存储"""
+        if self.cfg.exp_type:
+            exp_type = self.cfg.exp_type
+
         plt.figure(figsize=(6, 6))
-        sns.boxplot(x=x, y=y, palette={'Control':'#3498db', 'Fibrosis':'#e74c3c'})
+        sns.boxplot(x=x, y=y, palette={'Control':'#3498db', f'{exp_type}':'#e74c3c'})
         sns.stripplot(x=x, y=y, color='black', alpha=0.6, jitter=True)
         plt.title(f"{title}\nP-value: {p_value:.4e}", fontsize=10)
         plt.xlabel("Group")
