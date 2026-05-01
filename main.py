@@ -99,36 +99,11 @@ if len(sys.argv) > 1 and sys.argv[1] in {"version", "--version", "-v"}:
 if len(sys.argv) > 1 and sys.argv[1] in {"help", "--help", "-h"}:
     _print_custom_help_and_exit()
 
-# 创建/补全配置文件（缺失字段从 template 追加）
+# 检查配置文件是否存在（应由 setup.sh 生成）
 _config_path = os.path.join(CONFIG_DIR, "config.yaml")
-_template_path = os.path.join(CONFIG_DIR, "config.yaml.template")
-
 if not os.path.exists(_config_path):
-    with open(_config_path, "w") as f:
-        with open(_template_path, "r") as t:
-            f.write(t.read())
-else:
-    with open(_template_path, "r") as t:
-        template_data = yaml.safe_load(t)
-    with open(_config_path, "r") as c:
-        config_data = yaml.safe_load(c) or {}
-    # 将缺失的顶层键追写到文件末尾
-    missing = [k for k in template_data if k not in config_data and k != "hydra"]
-    if missing:
-        with open(_config_path, "a") as f:
-            f.write("\n")
-            for key in missing:
-                val = template_data[key]
-                if isinstance(val, list):
-                    f.write(f"{key}:\n")
-                    for item in val:
-                        f.write(f"  - {item}\n")
-                elif isinstance(val, bool):
-                    f.write(f"{key}: {str(val).lower()}\n")
-                elif isinstance(val, str):
-                    f.write(f'{key}: "{val}"\n')
-                else:
-                    f.write(f"{key}: {val}\n")
+    print("未找到 conf/config.yaml，请先运行 setup.sh 生成配置文件。")
+    sys.exit(1)
 
 
 def _init(cfg: Config) -> tuple:

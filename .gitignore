@@ -3,6 +3,7 @@
 /.venv/
 *.log
 /conf/config.yaml
+/conf/group_member.yaml
 /data/
 /error_logs/
 /outputs/

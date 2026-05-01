@@ -156,8 +156,8 @@ class FigurePlotter(ABC):
     def _bar_plot(self, x: pd.Series, y: pd.Series, colors: list) -> None:
         """画柱状图并存储"""
         plt.figure(figsize=(10, 6))
-        sns.barplot(x=x, y=y, palette=colors)
-        plt.title(f"Correlation of {self.cfg.tar_gene} with other genes\n(Only showing significant correlations)", fontsize=12)
+        sns.barplot(x=x, y=y, hue=x, palette=colors, legend=False)
+        plt.title(f"Correlation of {self.cfg.tar_gene} with other genes", fontsize=12)
         plt.xlabel("Gene")
         plt.ylabel("Correlation Coefficient (R)")
         plt.xticks(rotation=90)

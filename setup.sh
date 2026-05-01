@@ -28,7 +28,27 @@ else
     echo "[✓] conda 环境创建完成。"
 fi
 
-# 3. 注册 SGA 命令到 ~/.bashrc
+# 3. 生成配置文件
+CONFIG_FILE="${SGA_DIR}/conf/config.yaml"
+CONFIG_TEMPLATE="${SGA_DIR}/conf/config.yaml.template"
+if [ -f "${CONFIG_FILE}" ]; then
+    echo "[!] 配置文件已存在，跳过生成。"
+else
+    echo "[→] 正在从模板生成配置文件..."
+    cp "${CONFIG_TEMPLATE}" "${CONFIG_FILE}"
+    echo "[✓] 配置文件已生成: conf/config.yaml"
+    echo ""
+    echo "  ┌──────────────────────────────────────────┐"
+    echo "  │  请编辑 conf/config.yaml 设置分析参数：   │"
+    echo "  │  - tar_gene: 目标基因                     │"
+    echo "  │  - gse_id: GEO 数据集 ID                  │"
+    echo "  │  - analysis_mode: 分析模式                │"
+    echo "  │  执行 SGA help 查看完整配置说明           │"
+    echo "  └──────────────────────────────────────────┘"
+    echo ""
+fi
+
+# 4. 注册 SGA 命令到 ~/.bashrc
 BASHRC="${HOME}/.bashrc"
 MARKER="# >>> SGA command >>>"
 if grep -q "${MARKER}" "${BASHRC}" 2>/dev/null; then
@@ -48,7 +68,7 @@ EOF
     echo "[✓] SGA 命令已注册。"
 fi
 
-# 4. 安装 TumorDecon（免疫浸润分析依赖）
+# 5. 安装 TumorDecon（免疫浸润分析依赖）
 echo "[→] 安装 TumorDecon（免疫浸润分析依赖）..."
 conda run -n SGA pip install TumorDecon 2>/dev/null || {
     echo "[!] TumorDecon 安装失败（可能需要手动安装），忽略。"
@@ -61,6 +81,9 @@ echo "========================================"
 echo ""
 echo "  请执行以下命令使 SGA 命令生效："
 echo "    source ~/.bashrc"
+echo ""
+echo "  使用前请先编辑配置文件："
+echo "    vim conf/config.yaml"
 echo ""
 echo "  然后即可使用："
 echo "    SGA help"

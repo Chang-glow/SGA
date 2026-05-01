@@ -1,6 +1,8 @@
 import os
 import re
 import sys
+import shutil
+import tempfile
 import logging
 import requests
 import GEOparse
@@ -118,17 +120,16 @@ class DataLoader:
     def _get_gse(self) -> GEOparse.GEOTypes.GSE:
         """获取GEO数据包
 
+        SOFT 文件保留在 data/{GSE_ID}/，GEOparse 调用期间 CWD 隔离到 /tmp，
+        防止平台注释等中间文件污染项目根目录。
+
         Returns:
             gse: 下载的数据包
         """
-        # 读取配置项
-        data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
         gse_id = self.cfg.gse_id
-
-        dest_dir = os.path.normpath(data_dir)
+        dest_dir = os.path.normpath(os.path.join(self.cfg.data_dir, self.cfg.gse_id))
 
         try:
-            # 输入合法性监测
             is_str = isinstance(self.cfg.gse_id, str) and isinstance(dest_dir, str)
             if not is_str:
                 raise TypeError("请输入字符串而非其他类型参数")
@@ -137,10 +138,17 @@ class DataLoader:
             if not is_gse:
                 raise ValueError("请输入正确的GSE ID！")
 
-            # 下载所需GSE数据库
-            DataLoader._logger.info(f"开始下载或调用现存{gse_id}_family.soft.gz")
-            DataLoader._logger.info("正在检索远程服务器或本地缓存...")
-            gse = GEOparse.get_GEO(geo=gse_id, destdir=dest_dir)
+            # CWD 隔离到 /tmp，GEOparse 任何非 destdir 写入都不会污染项目目录
+            tmpdir = tempfile.mkdtemp(prefix="sga_tmp_")
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                DataLoader._logger.info(f"开始下载或调用现存{gse_id}_family.soft.gz")
+                DataLoader._logger.info("正在检索远程服务器或本地缓存...")
+                gse = GEOparse.get_GEO(geo=gse_id, destdir=dest_dir)
+            finally:
+                os.chdir(orig_cwd)
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
             if not gse:
                 raise Exception("出现未知错误，请检查\n1、GSE编号是否正确\n2、下载地址是否正确/有权限写入")
