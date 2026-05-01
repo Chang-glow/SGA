@@ -4,7 +4,7 @@ from typing import Optional
 def parse_user_input(
         number_parse: str = None,
         prompt: str = "请输入数字",
-        max_length: int = None,
+        max_index: int = None,
         whitelist: str = None
 ) -> Optional[list[int] | str]:
     """解析输入的数字对应序号
@@ -12,7 +12,7 @@ def parse_user_input(
     Args:
         number_parse: 输入数字
         prompt: 输入提示词
-        max_length: 长度上限
+        max_index: 最大索引值
         whitelist: 字母白名单
 
     Returns:
@@ -56,11 +56,11 @@ def parse_user_input(
         result_list = sorted(list(set(result_list)))
 
         # 检测是否超过上限
-        if not error_catcher and max_length:
+        if not error_catcher and max_index is not None:
             for num in result_list:
-                is_out_of_range = True if num > max_length+1 else False
+                is_out_of_range = True if num > max_index else False
                 if is_out_of_range:
-                    print(f"最大序号为{max_length+1},您的输入过大")
+                    print(f"最大序号为{max_index},您的输入过大")
                     error_catcher = True
                     break
 

@@ -1,14 +1,44 @@
 import os
+import re
 import scipy
 
 import numpy as np
 import pandas as pd
 
 from abc import ABC, abstractmethod
-from statsmodels.stats.multitest import fdrcorrection
 from typing import Optional
 
-from utils import loggers, Config, DataHandler
+from utils import loggers, Config, DataHandler, RESULT_DIR, resolve_save_path, df_content_hash
+
+
+_PROBE_RE = re.compile(
+    r"^(ILMN_|AFFY-|A_\d|CUST_|GI_|NM_|NR_|XM_|XR_"
+    r"|TC\d|Hs\.|Mm\.|Rn\.|DDB_|ENS|FBgn_|agc_|GE_)"
+)
+_NON_CODING_RES = [
+    re.compile(r"^MIR", re.IGNORECASE),
+    re.compile(r"^SNOR[A-Z]\d", re.IGNORECASE),
+    re.compile(r"^SCARNA\d", re.IGNORECASE),
+    re.compile(r"^RNU\d", re.IGNORECASE),
+    re.compile(r"^RNVU\d", re.IGNORECASE),
+    re.compile(r"^LINC\d", re.IGNORECASE),
+    re.compile(r"^CASC\d", re.IGNORECASE),
+    re.compile(r"^FLJ\d", re.IGNORECASE),
+    re.compile(r"^RNA5", re.IGNORECASE),
+    re.compile(r"^RN7SKP\d", re.IGNORECASE),
+    re.compile(r"-AS\d", re.IGNORECASE),
+    re.compile(r"-IT\d+$", re.IGNORECASE),
+    re.compile(r"-DT\d*$", re.IGNORECASE),
+    re.compile(r"^LOC\d", re.IGNORECASE),
+    re.compile(r"^RP[LS]\d*[A-Z]*P\d", re.IGNORECASE),
+    re.compile(r"[A-Z][A-Z0-9]*[A-Z]P\d+$", re.IGNORECASE),
+    re.compile(r"\d+P\d"),
+    re.compile(r"\d+P$"),
+]
+
+_TUPLE_PATTERNS = {
+    "mirna": [re.compile(r"^MIR", re.IGNORECASE)],
+}
 
 
 def fetch_gene_vector(df, tar_gene) -> pd.Series:
@@ -97,46 +127,108 @@ class Analyzer(ABC):
         """
         self.cfg = cfg
         self._meta_matrix_pack: Optional[dict] = None
+        self._analysis_result: Optional[pd.DataFrame] = None
         self._corr_result: Optional[pd.DataFrame] = None
         self._diff_result: Optional[pd.DataFrame] = None
+        self._hilo_result: Optional[pd.DataFrame] = None
+        self._immune_result: Optional[pd.DataFrame] = None
+        self._strategy = self._get_strategy()
 
     @classmethod
     def create(cls, cfg: Config, data: DataHandler):
-        """根据cfg检查使用哪个子类"""
+        """根据cfg检查数据传入方式,创建分析对象"""
         data_dir = os.path.join(cfg.data_dir, cfg.gse_id)
 
         pack_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_processed_pack.pkl")
+
+        if cfg.analysis_mode == "enrich":
+            return FileAnalyzer(cfg)
+
         if os.path.exists(pack_path) and not cfg.debug:
             cls._logger.info(f"发现数据包：{pack_path}，将从数据包中分析")
             return FileAnalyzer(cfg)
         elif data.meta_matrix_pack:
             cls._logger.info("开始从数据包中分析")
             return DataAnalyzer(cfg, data)
+        else:
+            raise RuntimeError(
+                "未找到可用数据源。请确保先执行阶段1（数据下载与清洗），"
+                "或使用 debug=false 启用缓存读取。"
+            )
 
 
     def calculate(self) -> pd.DataFrame:
-        """用于调用数据的API"""        
-        if self.cfg.analysis_mode == "corr":
-            self._logger.info("分析模式设定为相关性分析，将执行相关性分析")
-            if self._corr_result is not None and not self._corr_result.empty:
-                return self._corr_result
-            try:
-                return self.corr_analyzer()
-            except Exception:
-                self._logger.exception("分析失败")
-                raise
-        elif self.cfg.analysis_mode == "diff":
-            self._logger.info("分析模式设定为差异分析，将执行差异分析")
-            if self._diff_result is not None and not self._diff_result.empty:
-                return self._diff_result            
-            try:
-                return self.diff_analyzer()
-            except Exception:
-                self._logger.exception("分析失败")
-                raise
+        """用于调用数据的API"""
+        mode = self.cfg.analysis_mode
+        self._logger.info(f"分析模式设定为{mode}，将执行分析")
+
+        # 如果已经计算过且结果非空，直接返回缓存结果
+        if self._analysis_result is not None and not self._analysis_result.empty:
+            return self._analysis_result
+
+        try:
+            # 执行分析策略
+            result = self._strategy.calculate()
+            if result is None or result.empty:
+                self._logger.error("结果矩阵为空")
+                if mode == "enrich":
+                    return None
+                raise ValueError("结果矩阵为空")
+
+            # 在 padj/P-value 过滤前保存 raw CSV
+            if mode in ("diff", "hilo") and self.cfg.storage and result is not None and not result.empty:
+                self._data_storage(result, "csv", suffix="raw")
+
+            # 对 diff / hilo 结果清洗探针、padj 过滤、限制基因数
+            result = self._clean_diff_results(result, mode)
+
+            # tar_tuple 基因类别过滤
+            if self.cfg.tar_tuple and "Gene" in result.columns:
+                result = self._apply_tuple_filter(result)
+
+            # 根据分析模式将结果存储到对应属性，并执行存储
+            self._analysis_result = result
+            if mode == "corr":
+                self._corr_result = result
+            elif mode == "diff":
+                self._diff_result = result
+            elif mode == "hilo":
+                self._hilo_result = result
+            elif mode == "immune":
+                self._immune_result = result
+            elif mode == "enrich":
+                pass
+            if self.cfg.storage:
+                self._data_storage(result, "pkl")
+                self._data_storage(result, "csv")
+
+            return result
+        
+        except Exception:
+            self._logger.exception("分析失败")
+            raise
+
+    def _get_strategy(self):
+        """根据分析模式选择策略类"""
+        mode = self.cfg.analysis_mode
+        if mode == "corr":
+            from .strategies.correlation import CorrelationStrategy
+            return CorrelationStrategy(self)
+        elif mode == "diff":
+            from .strategies.difference import DiffStrategy
+            return DiffStrategy(self)
+        elif mode == "hilo":
+            from .strategies.highlow import HighLowStrategy
+            return HighLowStrategy(self)
+        elif mode == "enrich":
+            from .strategies.enrichment import EnrichStrategy
+            return EnrichStrategy(self)
+        elif mode == "immune":
+            from .strategies.immune import ImmuneStrategy
+            return ImmuneStrategy(self)
         else:
-            self._logger.error(f"不支持的分析模式: {self.cfg.analysis_mode}，请检查配置文件")
-            raise ValueError(f"不支持的分析模式: {self.cfg.analysis_mode}")
+            self._logger.error(f"不支持的分析模式: {mode}，请检查配置文件")
+            raise ValueError(f"不支持的分析模式: {mode}")
 
     @staticmethod
     def pearson_analyze(vec1: pd.Series, vec2: pd.Series) -> tuple[Optional[float], Optional[float]]:
@@ -173,7 +265,7 @@ class Analyzer(ABC):
         # 阈值可根据实际数据调整，默认为50
         return max_val <= self.cfg.log_threshold
 
-    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _clean_dataframe(self, df: pd.DataFrame, skip_log: bool = False) -> pd.DataFrame:
         """清洗单个矩阵,去除NaN,Inf和自动监测log"""
         df = df.copy()
 
@@ -186,6 +278,9 @@ class Analyzer(ABC):
         if df.shape[0] < origin_rows:
             self._logger.info(f"删除了{origin_rows - df.shape[0]}行NaN/Inf数据")
 
+        if skip_log:
+            return df
+
         # 判断log并转化没有log的矩阵
         if not self._is_log(df):
             self._logger.warning("原始数据未log转换,将执行log2(x+1)转换")
@@ -194,6 +289,97 @@ class Analyzer(ABC):
         else:
             self._logger.debug("数据已log转换,跳过该步骤")
 
+        return df
+
+    @staticmethod
+    def _tpm_convert(df: pd.DataFrame) -> pd.DataFrame:
+        """将表达矩阵按样本标准化至 TPM 尺度（每列总和 × 1M，用于免疫浸润分析）"""
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if numeric_cols.empty:
+            return df
+        col_sums = df[numeric_cols].sum(axis=0).replace(0, np.nan)
+        df = df.copy()
+        df[numeric_cols] = df[numeric_cols].div(col_sums, axis=1) * 1e6
+        return df
+
+    def _apply_tuple_filter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """按 tar_tuple 配置对结果做基因类别正向筛选"""
+        patterns = _TUPLE_PATTERNS.get(self.cfg.tar_tuple)
+        if patterns is None:
+            self._logger.warning(f"未知的 tar_tuple: {self.cfg.tar_tuple}，跳过过滤")
+            return df
+
+        gene_col = df["Gene"].astype(str).str.strip()
+        keep = pd.Series(False, index=df.index)
+        for pat in patterns:
+            keep = keep | gene_col.str.match(pat, na=False)
+        df = df.loc[keep]
+        self._logger.info(f"tar_tuple='{self.cfg.tar_tuple}' 过滤后保留 {len(df)} 个基因")
+        return df
+
+    def _clean_diff_results(self, df: pd.DataFrame, mode: str) -> pd.DataFrame:
+        """清洗 diff / hilo 结果：剔除探针 ID、按显著性过滤、限制基因数
+
+        strict_filter=True:  padj < p_threshold（严格 FDR 校正）
+        strict_filter=False: P_value < p_threshold 且 |log2FC| > log2fc_threshold（宽松）
+        """
+        if mode not in ("diff", "hilo") or df is None or df.empty:
+            return df
+
+        before = len(df)
+
+        if "Gene" in df.columns:
+            gene_col = df["Gene"].astype(str).str.strip()
+            keep = (
+                gene_col.notna()
+                & (gene_col != "")
+                & (gene_col != "nan")
+                & (gene_col != "None")
+                & ~gene_col.str.fullmatch(r"\d+")
+            )
+            # tar_tuple 模式跳过探针/非编码剔除，由 _apply_tuple_filter 正向筛选
+            if not self.cfg.tar_tuple:
+                keep = keep & ~gene_col.str.match(_PROBE_RE)
+                for ncrna_re in _NON_CODING_RES:
+                    keep = keep & ~gene_col.str.contains(ncrna_re, regex=True, na=False)
+
+            blacklist = getattr(self.cfg, "gene_blacklist", [])
+            if blacklist:
+                black_upper = [g.upper() for g in blacklist]
+                keep = keep & ~gene_col.str.upper().isin(black_upper)
+
+            df = df.loc[keep]
+
+        strict = getattr(self.cfg, "strict_filter", True)
+        p_thr = self.cfg.p_threshold
+
+        if strict:
+            if "padj" in df.columns:
+                p_before = len(df)
+                df = df[df["padj"].notna() & (df["padj"] < p_thr)]
+                self._logger.info(f"严格模式 padj < {p_thr}: {p_before} → {len(df)}")
+        else:
+            if "P_value" in df.columns:
+                p_before = len(df)
+                if mode == "hilo":
+                    df = df[df["P_value"].notna() & (df["P_value"] < p_thr)]
+                    self._logger.info(f"hilo宽松模式 P_value < {p_thr}: {p_before} → {len(df)}")
+                elif "log2FC" in df.columns:
+                    fc_thr = getattr(self.cfg, "log2fc_threshold", 0.5)
+                    df = df[
+                        df["P_value"].notna() & (df["P_value"] < p_thr)
+                        & df["log2FC"].notna() & (df["log2FC"].abs() > fc_thr)
+                    ]
+                    self._logger.info(f"宽松模式 P_value < {p_thr} & |log2FC| > {fc_thr}: {p_before} → {len(df)}")
+
+        max_genes = getattr(self.cfg, "max_output_genes", 0)
+        if max_genes > 0 and len(df) > max_genes:
+            sort_col = "padj" if strict else "P_value"
+            df = df.sort_values(sort_col).head(max_genes)
+
+        removed = before - len(df)
+        if removed:
+            self._logger.info(f"diff/hilo 结果清洗完成，剔除 {removed} 行，保留 {len(df)} 行。")
         return df
 
     def _get_sample_columns(self, df: pd.DataFrame) -> list:
@@ -238,19 +424,29 @@ class Analyzer(ABC):
         return expr_df
 
     def _clean_pack(self, raw_pack: dict) -> dict:
+        """清洗整个数据包,处理其中的DataFrame矩阵并保留非矩阵元数据"""
         if self._meta_matrix_pack is None:
+            is_immune = self.cfg.analysis_mode == "immune"
             cleaned_pack = {}
             for name, item in raw_pack.items():
                 if name in {"meta", "meta_full"}:
                     cleaned_pack[name] = item.copy()
                 elif isinstance(item, dict):
                     if 'matrix_aligned' in item and isinstance(item['matrix_aligned'], pd.DataFrame):
-                        cleaned_pack[name] = self._clean_dataframe(item['matrix_aligned'])
+                        df = self._clean_dataframe(item['matrix_aligned'], skip_log=is_immune)
+                        if is_immune:
+                            self._logger.info("正在进行 TPM 转换（免疫浸润分析预处理）...")
+                            df = self._tpm_convert(df)
+                        cleaned_pack[name] = df
                     else:
                         # 保留非矩阵形式的字典元数据，如 group_info 或其他配置
                         cleaned_pack[name] = item.copy()
                 elif isinstance(item, pd.DataFrame):
-                    cleaned_pack[name] = self._clean_dataframe(item)
+                    df = self._clean_dataframe(item, skip_log=is_immune)
+                    if is_immune:
+                        self._logger.info("正在进行 TPM 转换（免疫浸润分析预处理）...")
+                        df = self._tpm_convert(df)
+                    cleaned_pack[name] = df
                 else:
                     cleaned_pack[name] = item
             return cleaned_pack
@@ -267,224 +463,40 @@ class Analyzer(ABC):
 
     @property
     def significant(self):
-        """最显著值"""
+        """最显著值,corr模式为按相关性R排序,diff模式以及hilo模式为按log2FC排序"""
+        # 根据分析模式返回显著结果
+        if self._analysis_result is None or self._analysis_result.empty:
+             self._logger.warning("分析结果为空，无法提取显著值")
+             return None
+        
         if self.cfg.analysis_mode == "corr":
             if self._corr_result is None:
                 df = self.calculate()
             else:
                 df = self._corr_result
             significant_findings = df[df['P_value'] < 0.05].sort_values('R')
-        elif self.cfg.analysis_mode == "diff":
-            if self._diff_result is None:
+        
+        elif self.cfg.analysis_mode in ["diff", "hilo"]:
+            if self._diff_result is None and self._hilo_result is None:
                 df = self.calculate()
             else:
-                df = self._diff_result
+                df = self._diff_result if self._diff_result is not None else self._hilo_result
             significant_findings = df[df['padj'] < 0.05].sort_values('log2FC')
+
+        elif self.cfg.analysis_mode == "enrich":
+            if self._analysis_result is None or self._analysis_result.empty:
+                df = self.calculate()
+            else:
+                df = self._analysis_result
+            significant_findings = df[df.get('Adjusted P-value', pd.Series(dtype=float)) < 0.05].sort_values('Adjusted P-value')
+        
         else:
             self._logger.error(f"不支持的分析模式: {self.cfg.analysis_mode}，请检查配置文件")
             raise ValueError(f"不支持的分析模式: {self.cfg.analysis_mode}")
+        
         return significant_findings
 
-    def _corr_calculater(self, meta_matrix_pack: dict) -> Optional[pd.DataFrame]:
-        """计算目标基因与常见标识物的相关性
-
-        Args:
-            meta_matrix_pack: 打包的测序矩阵数据，格式为{文件名: 对应矩阵数据}
-
-        Returns:
-            gene_corr_table: DataFrame格式的分析结果
-        """
-        # 读取配置
-        tar_gene = self.cfg.tar_gene
-
-        # 提取pack里的数据计算
-        results_list = []
-        df: pd.DataFrame
-        for name, df in meta_matrix_pack.items():
-            # 避开元数据矩阵
-            if name == "meta":
-                continue
-
-            self._logger.info(f"--- 当前处理数据{name} ---")
-            self._logger.info(f"提取目标基因{tar_gene}的数据中...")
-            target_vec = fetch_gene_vector(df, tar_gene)
-
-            self._logger.info("将以常见标识物分类进行计算并储存")
-            for category, gene_list in self.hfm_dict.items():
-                for gene in gene_list:
-                    self._logger.debug(f"提取标识物基因{gene}的数据中...")
-                    marker_vec = fetch_gene_vector(df, gene)
-
-                    r, p = None, None
-                    if not marker_vec.empty:
-                        self._logger.debug("数据提取完成，计算相关性中...")
-                        r, p = self.pearson_analyze(target_vec, marker_vec)
-
-                    if r is not None:
-                        self._logger.debug("相关性计算完成！")
-                        results_list.append({
-                            "Matrix": name,
-                            "Category": category,
-                            "Gene": gene,
-                            "R": r,
-                            "P_value": p
-                        })
-
-        # 转化为DataFrame，以便画图
-        if results_list:
-            self._logger.info("相关性计算完成！")
-            gene_corr_table = pd.DataFrame(results_list)
-        else:
-            return None
-
-        return gene_corr_table
-
-    def corr_analyzer(self):
-        """调用相关性分析主pipeline,串联数据读取和分析得出相关性
-
-        Returns:
-            gene_corr_table: 目标基因和常见标识基因相关性分析结果及数据
-        """
-        # 查找缓存
-        data_dir = self.cfg.data_dir
-        gse_id = self.cfg.gse_id
-
-        gene_corr_path = os.path.join(data_dir, "pkl", f"{gse_id}_correlation_summary.pkl")
-        if os.path.exists(gene_corr_path) and self.cfg.analysis_mode == "corr" and not self.cfg.debug:
-            self._logger.info(f"发现现存分析结果：{gene_corr_path}，跳过相关性分析")
-            self._corr_result = pd.read_pickle(gene_corr_path)
-            return self._corr_result
-        
-        # 读取数据
-        if not self._meta_matrix_pack:
-            self._logger.info("正在读取数据...")
-            self.roaming_data()
-        meta_matrix_pack = self._meta_matrix_pack
-        if meta_matrix_pack:
-            self._logger.info("读取成功，将继续分析")
-
-        # 计算相关性
-        result_df = self._corr_calculater(meta_matrix_pack)
-        if result_df is not None and not result_df.empty:
-            self._corr_result = result_df
-            if self.cfg.storage:
-                self._data_storage(result_df, "pkl")
-                self._data_storage(result_df, "csv")
-            return result_df
-        else:
-            self._logger.error("结果矩阵为空")
-            raise
-
-    def diff_analyzer(self) -> Optional[pd.DataFrame]:
-        """差异分析主pipeline"""
-        # 查找缓存
-        data_dir = self.cfg.data_dir
-        gse_id = self.cfg.gse_id
-
-        gene_diff_path = os.path.join(data_dir, "pkl", f"{gse_id}_differential_summary.pkl")
-        if os.path.exists(gene_diff_path) and self.cfg.analysis_mode == "diff" and not self.cfg.debug:
-            self._logger.info(f"发现现存分析结果：{gene_diff_path}，跳过差异分析")
-            self._diff_result = pd.read_pickle(gene_diff_path)
-            return self._diff_result
-        
-        # 读取数据
-        if not self._meta_matrix_pack:
-            self._logger.info("正在读取数据...")
-            self.roaming_data()
-        pack = self._meta_matrix_pack
-        meta = pack.get("meta")
-
-        if 'group' in meta.columns and not meta['group'].isnull().all():
-            self._logger.info("读取成功，将继续分析")
-        else:
-            self._logger.error("未找到分组信息，无法进行差异分析")
-            raise ValueError("未找到分组信息，无法进行差异分析")
-        
-        # 根据分组进行差异分析
-        # 1. 选择表达矩阵
-        expr_keys = [k for k, v in pack.items() if k not in {"meta", "meta_full", "group_info"}]
-        if not expr_keys:
-            raise KeyError("No expression matrix found in data pack")
-        expr_df = pack[expr_keys[0]]
-        if isinstance(expr_df, dict) and 'matrix_aligned' in expr_df:
-            expr_df = expr_df['matrix_aligned']
-
-        # 2. 根据group拆分
-        exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
-        control_samples = meta[meta['group'] == 'Control'].index.tolist()
-        exp_samples = meta[meta['group'] == exp_type].index.tolist()
-        if not control_samples or not exp_samples:
-            self._logger.error(f"分组信息不完整,无法找到Control或{exp_type}组的样本")
-            raise ValueError(f"分组信息不完整,无法找到Control或{exp_type}组的样本")
-        
-        # 3.对齐矩阵样本
-        common_samples = list(dict.fromkeys(control_samples + exp_samples))
-
-        # 如果样本名在行索引中而不是列名中，则转置矩阵
-        if set(common_samples).issubset(expr_df.index):
-            expr_df = expr_df.T
-
-        missing_samples = [s for s in common_samples if s not in expr_df.columns]
-        if missing_samples:
-            self._logger.warning(f"样本名未在表达矩阵列中找到: {missing_samples[:10]}{'...' if len(missing_samples)>10 else ''}")
-            if 'meta_full' in pack:
-                expr_df = self._rename_expr_columns_by_meta_order(expr_df, pack['meta_full'])
-                missing_samples = [s for s in common_samples if s not in expr_df.columns]
-                if not missing_samples:
-                    expr_df = expr_df.loc[:, common_samples]
-                    self._logger.info("已按原始元数据顺序将表达矩阵列映射为 GSM 样本名")
-                else:
-                    self._logger.error("样本名与原始元数据顺序无法完全对应,无法重新映射表达矩阵")
-                    raise KeyError("样本名与表达矩阵列不匹配，请检查数据和元数据")
-            else:
-                self._logger.error("无法从表达矩阵列名中推断Control/Experiment分组，请检查数据")
-                raise KeyError("样本名与表达矩阵列不匹配，请检查数据和元数据")
-        else:
-            expr_df = expr_df.loc[:, common_samples]
-
-        control_values = expr_df[control_samples].to_numpy(dtype=float)
-        exp_values = expr_df[exp_samples].to_numpy(dtype=float)
-
-        self._logger.info("开始差异表达统计计算，可能需要一些时间")
-
-        control_count = np.sum(~np.isnan(control_values), axis=1)
-        exp_count = np.sum(~np.isnan(exp_values), axis=1)
-        valid_mask = (control_count >= 3) & (exp_count >= 3)
-
-        if not np.any(valid_mask):
-            self._logger.error("没有足够的样本值进行差异分析")
-            raise ValueError("没有足够的样本值进行差异分析")
-
-        ttest_result = scipy.stats.ttest_ind(
-            control_values,
-            exp_values,
-            axis=1,
-            equal_var=False,
-            nan_policy='omit'
-        )
-
-        if self._is_log(expr_df):
-            log2fc = np.nanmean(exp_values, axis=1) - np.nanmean(control_values, axis=1)
-        else:
-            log2fc = np.log2(np.nanmean(exp_values, axis=1) + 1) - np.log2(np.nanmean(control_values, axis=1) + 1)
-
-        _diff_result = pd.DataFrame({
-            "Gene": expr_df.index,
-            "log2FC": log2fc,
-            "P_value": ttest_result.pvalue
-        })
-        _diff_result = _diff_result.loc[valid_mask].reset_index(drop=True)
-
-        # 4. FDR校正
-        _, _diff_result['padj'] = fdrcorrection(_diff_result['P_value'].fillna(1))
-
-        self._diff_result = _diff_result
-        if self.cfg.storage:
-            self._data_storage(_diff_result, "pkl")
-            self._data_storage(_diff_result, "csv")
-        return _diff_result
-
-    def _data_storage(self, result_df: pd.DataFrame, save_format: str):
+    def _data_storage(self, result_df: pd.DataFrame, save_format: str, suffix: str = None):
         """存储DataFrame数据至pkl和csv"""
         # 读取配置
         data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
@@ -499,16 +511,37 @@ class Analyzer(ABC):
         else:
             raise ValueError(f"不支持的格式:{save_format}")
         
-        if self.cfg.analysis_mode == "corr":
-            file_name = f"{gse_id}_correlation_summary.{ext}"
-        else:
-            file_name = f"{gse_id}_differential_summary.{ext}"
+        # 映射分析模式向文件名关键词
+        mode_mapping = {
+            "corr": "correlation",
+            "diff": "differential",
+            "hilo": "highlow",
+            "enrich": "enrichment",
+            "immune": "immune"
+        }
 
-        storage_path = os.path.join(data_dir, ext, file_name)
+        # 构建文件名和路径
+        keyword = mode_mapping.get(self.cfg.analysis_mode, 'unknown')
+        if suffix and save_format == "csv":
+            file_name = f"{gse_id}_{keyword}_summary_{suffix}.{ext}"
+        else:
+            file_name = f"{gse_id}_{keyword}_summary.{ext}"
+
+        if save_format == "csv":
+            storage_path = os.path.join(RESULT_DIR, save_format, file_name)
+        else:
+            storage_path = os.path.join(data_dir, ext, file_name)
         os.makedirs(os.path.dirname(storage_path), exist_ok=True)
+
+        # 防覆盖 + 内容去重
+        storage_path = resolve_save_path(storage_path, df_content_hash(result_df))
+        if storage_path is None:
+            self._logger.info(f"{fmt} 文件内容与已有文件相同，跳过保存")
+            return
 
         save_mode = getattr(result_df, f"to_{fmt}")
 
+        # 尝试保存文件，并捕获可能的异常
         try:
             if fmt == "csv":
                 save_mode(storage_path, index=False)

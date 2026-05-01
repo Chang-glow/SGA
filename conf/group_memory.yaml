@@ -1,0 +1,147 @@
+GSE14323:
+  diff:
+    control_values:
+    - Normal, biological rep 1
+    - Normal, biological rep 2
+    - Normal, biological rep 3
+    - Normal, biological rep 4
+    - Normal, biological rep 5
+    - Normal, biological rep 6
+    - Normal, biological rep 7
+    - Normal, biological rep 8
+    - Normal, biological rep 9
+    - Normal, biological rep 10
+    - Normal, biological rep 11
+    - Normal, biological rep 12
+    - Normal, biological rep 13
+    - Normal, biological rep 14
+    - Normal, biological rep 15
+    - Normal, biological rep 16
+    - Normal, biological rep 17
+    - Normal, biological rep 18
+    - Normal, biological rep 19
+    exp_values:
+    - cirrhosis, biological rep 41
+    - cirrhosis, biological rep 1
+    - cirrhosis, biological rep 2
+    - cirrhosis, biological rep 3
+    - cirrhosis, biological rep 4
+    - cirrhosis, biological rep 5
+    - cirrhosis, biological rep 6
+    - cirrhosis, biological rep 7
+    - cirrhosis, biological rep 8
+    - cirrhosis, biological rep 9
+    - cirrhosis, biological rep 10
+    - cirrhosis, biological rep 11
+    - cirrhosis, biological rep 12
+    - cirrhosis, biological rep 13
+    - cirrhosis, biological rep 14
+    - cirrhosis, biological rep 15
+    - cirrhosis, biological rep 16
+    - cirrhosis, biological rep 17
+    - cirrhosis, biological rep 18
+    - cirrhosis, biological rep 19
+    - cirrhosis, biological rep 20
+    - cirrhosis, biological rep 21
+    - cirrhosis, biological rep 22
+    - cirrhosis, biological rep 23
+    - cirrhosis, biological rep 24
+    - cirrhosis, biological rep 25
+    - cirrhosis, biological rep 26
+    - cirrhosis, biological rep 27
+    - cirrhosis, biological rep 28
+    - cirrhosis, biological rep 29
+    - cirrhosis, biological rep 30
+    - cirrhosis, biological rep 31
+    - cirrhosis, biological rep 32
+    - cirrhosis, biological rep 33
+    - cirrhosis, biological rep 34
+    - cirrhosis, biological rep 35
+    - cirrhosis, biological rep 36
+    - cirrhosis, biological rep 37
+    - cirrhosis, biological rep 38
+    - cirrhosis, biological rep 39
+    - cirrhosis, biological rep 40
+    group_select_col: title
+GSE143318:
+  diff:
+    control_values:
+    - Donor Patient 1
+    - Donor Patient 2
+    - Donor Patient 3
+    - Donor Patient 4
+    - Donor Patient 5
+    - Donor Patient 6
+    - Donor Patient 8
+    exp_values:
+    - Alcoholic Hepatitis Patient 2
+    - Alcoholic Hepatitis Patient 3
+    - Alcoholic Hepatitis Patient 4
+    - Alcoholic Hepatitis Patient 5
+    - Alcoholic Hepatitis Patient 6
+    - Alcoholic Hepatitis Patient 8
+    - Alcoholic Hepatitis Patient 51
+    - Alcoholic Hepatitis Patient 53
+    - Alcoholic Hepatitis Patient 57
+    - Alcoholic Hepatitis Patient 60
+    - Alcoholic Hepatitis Patient 63
+    - Alcoholic Hepatitis Patient 64
+    - Alcoholic Cirrhosis Patient 1
+    - Alcoholic Cirrhosis Patient 2
+    - Alcoholic Cirrhosis Patient 3
+    - Alcoholic Cirrhosis Patient 4
+    - Alcoholic Cirrhosis Patient 5
+    group_select_col: title
+  matrices:
+  - GSE143318_Rawcount.txt.gz
+GSE25097:
+  diff:
+    control_values:
+    - healthy sample 1
+    - healthy sample 2
+    - healthy sample 3
+    - healthy sample 4
+    - healthy sample 5
+    - healthy sample 6
+    exp_values:
+    - cirrhotic sample 1
+    - cirrhotic sample 2
+    - cirrhotic sample 3
+    - cirrhotic sample 4
+    - cirrhotic sample 5
+    - cirrhotic sample 6
+    - cirrhotic sample 7
+    - cirrhotic sample 8
+    - cirrhotic sample 9
+    - cirrhotic sample 10
+    - cirrhotic sample 11
+    - cirrhotic sample 12
+    - cirrhotic sample 13
+    - cirrhotic sample 14
+    - cirrhotic sample 15
+    - cirrhotic sample 16
+    - cirrhotic sample 17
+    - cirrhotic sample 18
+    - cirrhotic sample 19
+    - cirrhotic sample 20
+    - cirrhotic sample 21
+    - cirrhotic sample 22
+    - cirrhotic sample 23
+    - cirrhotic sample 24
+    - cirrhotic sample 25
+    - cirrhotic sample 26
+    - cirrhotic sample 27
+    - cirrhotic sample 28
+    - cirrhotic sample 29
+    - cirrhotic sample 30
+    - cirrhotic sample 31
+    - cirrhotic sample 32
+    - cirrhotic sample 33
+    - cirrhotic sample 34
+    - cirrhotic sample 35
+    - cirrhotic sample 36
+    - cirrhotic sample 37
+    - cirrhotic sample 38
+    - cirrhotic sample 39
+    - cirrhotic sample 40
+    group_select_col: title

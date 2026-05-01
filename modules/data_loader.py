@@ -1,13 +1,18 @@
 import os
 import re
 import sys
+import logging
 import requests
 import GEOparse
 from typing import Optional, Dict
 
 import pandas as pd
+import yaml
 
-from utils import loggers, Config, parse_user_input
+from utils import loggers, Config, parse_user_input, safe_filepath
+from utils.paths import CONFIG_DIR
+
+logging.getLogger("GEOparse").setLevel(logging.WARNING)
 
 
 class DataLoader:
@@ -22,30 +27,26 @@ class DataLoader:
         """
         self.cfg: Config = cfg
         self._data: Optional[Dict[str, pd.DataFrame]] = None
-        self._chosen_meta = None
         self._download_data = None
         self._group_mapping = {}
         self._group_col = None
+        self.gse = None
 
     def loader(self) -> dict:
         """
         用于调用数据的API
 
         Returns:
-            self._data: 存储的字典数据
+            downloaded_data: 下载后的文件路径字典
         """
-        if not self._data:
+        if self._download_data is None:
             gse = self._get_gse()
-            self._gse = gse
+            self.gse = gse
             self._download_data = self._user_selection_flow(gse)
             if not self._download_data:
                 raise RuntimeError("未获取到补充矩阵文件，请检查 GEO 数据集是否包含匹配的 matrix/count 文件，并确保按提示选择文件")
-            self.get_meta(gse)
-            data = self._build_pack()
-            if not data:
-                raise RuntimeError("数据未下载创建")
-            return data
-        return self._data
+            return self._download_data
+        return self._download_data
 
     def download_geo_data(self, url: str) -> Optional[str]:
         """从GEO下载所需数据
@@ -156,91 +157,8 @@ class DataLoader:
             DataLoader._logger.error(f"【未知错误】:{e}")
             raise
     
-    def _group_division(self, meta) -> None:
-        """根据元数据标签自动化或交互式分组
-        
-        Args:
-            meta: 元数据
-        """
-        # 读取配置
-        group_select_col = self.cfg.group_select_col
-        control_label = self.cfg.control_label
-        exp_label = self.cfg.exp_label
-
-        def _normalize_labels(label):
-            if label is None:
-                return []
-            if isinstance(label, (list, tuple)):
-                return [str(item).lower() for item in label if item is not None]
-            return [str(label).lower()]
-
-        control_labels = _normalize_labels(control_label)
-        exp_labels = _normalize_labels(exp_label)
-
-        if group_select_col not in meta.columns:
-            DataLoader._logger.warning(f"未在元数据中找到指定的分组列 '{group_select_col}'，进入交互式分组流程")
-            self._manual_group_division(meta)
-            return
-
-        unique_groups = meta[group_select_col].unique()
-        control_groups = [
-            g for g in unique_groups
-            if any(label in str(g).lower() for label in control_labels)
-        ]
-        exp_groups = [
-            g for g in unique_groups
-            if any(label in str(g).lower() for label in exp_labels)
-        ]
-
-        if control_groups and exp_groups:
-            self._chosen_meta = meta[meta[group_select_col].isin(control_groups + exp_groups)]
-            exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
-            DataLoader._logger.info(f"自动分组成功,控制组标签: {control_groups},实验组标签: {exp_groups}")
-            self._group_mapping = {
-                'Control': control_groups,
-                exp_type: exp_groups
-            }
-            self._group_col = group_select_col
-            return
-
-        DataLoader._logger.warning("未能自动识别到组别标签，进入交互式分组流程")
-        self._manual_group_division(meta)
-
-    def _manual_group_division(self, meta) -> None:
-        """手动分组流程
-        
-        Args:
-            meta: 元数据
-        """
-        # 先手动选择分组列和标签
-        res1 = self._manual_group_select(meta, group_label="Control")
-        control_valuas = [res1["unique_groups"][i] for i in res1["group_indices"]]
-        group_col = res1["current_col"]
-
-        # 再次调用，使用第一次的默认列
-        res2 = self._manual_group_select(meta, group_label="Experiment", default_col=group_col)
-        exp_valuas = [res2["unique_groups"][i] for i in res2["group_indices"]]
-
-        # 若切换列则warning警告
-        if res2["current_col"] != group_col:
-            DataLoader._logger.warning(f"分组列在两次选择中不一致，第一次选择了'{group_col}'，第二次选择了'{res2['current_col']}'，请确保选择的列包含所需的分组信息")
-
-        # 检查是否至少选择了一个控制组标签和一个实验组标签
-        if not control_valuas or not exp_valuas:
-            DataLoader._logger.error("未选择任何分组标签，无法进行分组")
-            raise ValueError("至少需要选择一个控制组标签和一个实验组标签")
-        
-        # 最后过滤meta
-        exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
-        self._group_col = group_col
-        self._chosen_meta = meta[meta[group_col].isin(control_valuas + exp_valuas)]
-        self._group_mapping = {
-            'Control': control_valuas,
-            exp_type: exp_valuas
-        }
-
     def _user_selection_flow(self, gse) -> None:
-        """用户交互下载数据
+        """用户交互下载数据，支持记忆矩阵选择
 
         Args:
             gse: 下载的GES对象
@@ -250,7 +168,6 @@ class DataLoader:
             sp_files = gse.metadata.get('supplementary_file', [])
             if not sp_files:
                 DataLoader._logger.warning("未发现补充文件")
-                raise FileNotFoundError("未发现补充文件")
 
             # 简单筛选去除明显不是目标文件内容
             candidates = [f for f in sp_files if (
@@ -259,12 +176,38 @@ class DataLoader:
                 or '.txt' in f.lower()
             ) and 'readme' not in f.lower()]
 
-            # 手动确认需要的文件
-            print("\n--- 发现以下疑似矩阵文件 ---")
-            for i, url in enumerate(candidates):
-                print(f"[{i}] {os.path.basename(url)}")
+            # 无候选补充文件时尝试从 SOFT 提取内嵌表达矩阵
+            if not candidates:
+                DataLoader._logger.warning("未在补充文件中发现 matrix/count/txt 文件，尝试从 SOFT 文件提取")
+                soft_result = self._extract_expression_from_soft(gse)
+                if soft_result is not None:
+                    return soft_result
+                raise FileNotFoundError("未发现补充文件且 SOFT 文件中也没有表达数据")
 
-            selected_idx = parse_user_input(prompt="请输入需要的矩阵序号(如1:8,11):", max_length=len(candidates))
+            selected_idx = None
+
+            # 尝试从记忆中加载矩阵选择
+            if getattr(self.cfg, "group_memory_use", False):
+                saved = self._load_matrix_memory(candidates)
+                if saved is not None:
+                    selected_idx = saved
+                    DataLoader._logger.info("已从记忆中恢复矩阵选择，跳过交互。")
+
+            # 无记忆时交互选择
+            if selected_idx is None:
+                print("\n--- 发现以下疑似矩阵文件 ---")
+                for i, url in enumerate(candidates):
+                    print(f"[{i}] {os.path.basename(url)}")
+
+                selected_idx = parse_user_input(
+                    prompt="请输入需要的矩阵序号(如1:8,11):",
+                    max_index=len(candidates) - 1,
+                )
+
+                # 保存当前选择
+                if getattr(self.cfg, "group_memory_enabled", False):
+                    self._save_matrix_memory(candidates, selected_idx)
+
             selected_urls = [candidates[i] for i in selected_idx]
 
             # 下载选中的文件
@@ -282,207 +225,143 @@ class DataLoader:
                 raise Exception("出现未知错误，请检查\n1、GSE编号是否正确\n2、下载地址是否正确/有权限写入")
 
             return downloaded_data
-        
-        
+
         except FileNotFoundError as e:
             DataLoader._logger.error(f"【文件未找到】:{e}")
         except Exception as e:
             DataLoader._logger.error(f"【未知错误】:{e}")
 
-    def get_meta(self, gse) -> None:
-        # 提取meta
-        meta = gse.phenotype_data
-        if not meta.empty:
-            DataLoader._logger.info(f"元数据提取成功，样本数{len(meta)}")
+    def _extract_expression_from_soft(self, gse) -> Optional[dict]:
+        """从 SOFT 文件内嵌的 GSM 数据表提取基因级表达矩阵
 
-        if self.cfg.analysis_mode == "diff":
-            if not self.cfg.group_select_col:
-                # 手动选择meta中的需要的title
-                selected_res = self._manual_group_select(meta)
-                selected_group_indices = selected_res["group_indices"]
-                unique_groups = selected_res["unique_groups"]
-                current_col = selected_res["current_col"]
-                # 若正常选中矩阵序号则过滤meta
-                if isinstance(selected_group_indices, list):
-                    target_groups = [unique_groups[i] for i in selected_group_indices]
-                    condition = meta[current_col].isin(target_groups)
-                    self._chosen_meta = meta[condition]
-                    return
-
-            self._group_division(meta)
-        else:
-            DataLoader._logger.info("当前为相关性分析模式，跳过自动分组流程")
-            self._chosen_meta = meta.copy()
-
-
-    def _manual_group_select(self, meta, group_label: str = None, default_col: str = None) -> dict:
-        """从元数据中交互式选择所需内容
-
-        Args:
-            meta: 元数据
-            group_label: 要选择的组标签
-            default_col: 默认查看的列
+        适用于芯片数据集（SOFT 中每个 GSM 内嵌表达值表），
+        不适用于 RNA-seq（Sample_data_row_count = 0，无内嵌数据）。
 
         Returns:
-            selected_res: 包含选中矩阵信息的字典
+            {filename: filepath} 或 None
         """
-        if default_col and default_col in meta.columns:
-            current_col = default_col
-        else:
-            # 默认尝试“title”
-            current_col = "title" if "title" in meta.columns else meta.columns[0]
-        # 选列选组状态机
-        while True:  # 外层循环选矩阵
-            unique_groups = meta[current_col].unique()
-            if group_label:
-                print(f"\n --- 正在为[{group_label}]选择分组 ---")
-            print(f"\n当前查看列:[{current_col}]发现以下样本分组描述")
-            for i, group_name in enumerate(unique_groups):
-                print(f"[{i}] {group_name}")
+        try:
+            first_gsm = next(iter(gse.gsms.values()))
+            if first_gsm.table is None or first_gsm.table.empty:
+                DataLoader._logger.info("SOFT 文件中无内嵌表达数据")
+                return None
 
-            # 手动选择所需内容
-            selected_group_indices = parse_user_input(
-                prompt=f"请输入 {group_label} 组需要的内容序号(如1:8,11,输入'm'重新选择列):",
-                max_length=len(unique_groups),
-                whitelist="m"
+            gpl_counts = {}
+            for gsm in gse.gsms.values():
+                gpl_name = gsm.metadata.get('platform_id', ['unknown'])[0]
+                gpl_counts[gpl_name] = gpl_counts.get(gpl_name, 0) + 1
+            main_gpl_name = max(gpl_counts, key=gpl_counts.get)
+            gpl = gse.gpls.get(main_gpl_name)
+            if gpl is None or gpl.table is None:
+                DataLoader._logger.warning(f"无法获取平台 {main_gpl_name} 的注释表")
+                return None
+
+            gene_col = None
+            for candidate in ['GeneSymbol', 'Gene Symbol', 'SYMBOL', 'GENE_SYMBOL']:
+                if candidate in gpl.table.columns:
+                    gene_col = candidate
+                    break
+            if gene_col is None:
+                DataLoader._logger.warning(
+                    f"平台 {main_gpl_name} 注释表中未找到基因名列，可用列: {list(gpl.table.columns)}"
+                )
+                return None
+
+            # 构建探针→基因符号映射
+            gpl_df = gpl.table.set_index('ID')
+            probe_to_gene = gpl_df[gene_col].dropna()
+            DataLoader._logger.info(
+                f"探针→基因映射: {len(probe_to_gene)} 个探针有基因注释"
             )
 
-            # 若列中没有所需信息则重新选列
-            if selected_group_indices == "m":
-                print("\n--- 所有元数据列 ---")
-                for i, col in enumerate(meta.columns):  # 内层循环选列
-                    print(f"[{i}] {col}")
-                
-                # 故技重施
-                selected_col = parse_user_input(
-                    prompt="请选择(可能)包含分组信息的列序号:",
-                    max_length=len(meta.columns)
-                )
-                
-                # 更新当前列回到上级循环
-                current_col = meta.columns[selected_col[0]]
-                continue
-        
-            selected_res = {"group_indices": selected_group_indices,"unique_groups": unique_groups, "current_col": current_col}
-            return selected_res
-
-    def _build_pack(self) -> Optional[dict]:
-        """打包处理过的数据
-
-        Returns:
-            meta_matrix_pack: 打包过的数据，键为矩阵名，值为矩阵
-        """
-        # 读取配置
-        data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
-        gse_id = self.cfg.gse_id
-        tar_gene = self.cfg.tar_gene
-
-        strict_mode = self.cfg.strict_mode
-        storage = self.cfg.storage
-        debug = self.cfg.debug
-
-        chosen_meta = self._chosen_meta
-        downloaded_data = self._download_data
-        exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
-
-        if downloaded_data is None:
-            raise RuntimeError("未获取到下载的数据文件，无法构建数据包")
-
-        try:
-            # 如果有分组信息，为 meta 添加 group 列
-            if self._group_col is not None and self._group_mapping:
-                def map_group(val):
-                    if val in self._group_mapping.get('Control', []):
-                        return 'Control'
-                    elif val in self._group_mapping.get(exp_type, []):
-                        return exp_type
-                    else:
-                        return None
-                chosen_meta['group'] = chosen_meta[self._group_col].apply(map_group)
-                # 丢弃 group 为 None 的样本
-                chosen_meta = chosen_meta[chosen_meta['group'].notna()]
-
-            # 将data加载到df，并处理
-            meta_matrix_pack = {
-                "meta": chosen_meta,
-                "meta_full": self._gse.phenotype_data.copy()
-            }
-            for datafile_name, file_path in downloaded_data.items():
-                DataLoader._logger.info(f"正在将 {datafile_name} 加载至 DataFrame...")
-
-                # 防止个别文件出错
-                if not file_path:
-                    DataLoader._logger.warning(f"文件 {datafile_name} 的路径为空，跳过处理。")
+            # 逐列构建表达矩阵，避免 pivot_and_annotate 的内存峰值
+            n_samples = len(gse.gsms)
+            DataLoader._logger.info(f"从 {n_samples} 个样本提取表达值...")
+            data_series = {}
+            for i, (gsm_name, gsm) in enumerate(gse.gsms.items()):
+                if gsm.table is None or gsm.table.empty:
                     continue
+                if i % 100 == 0:
+                    DataLoader._logger.info(f"  提取进度: {i + 1}/{n_samples}")
+                tbl = gsm.table.set_index('ID_REF')
+                if 'VALUE' in tbl.columns:
+                    data_series[gsm_name] = tbl['VALUE']
 
-                if not os.path.exists(file_path):
-                    DataLoader._logger.warning(f"找不到本地文件: {file_path}")
-                    continue
+            if not data_series:
+                DataLoader._logger.warning("未能从任何 GSM 提取到表达值")
+                return None
 
-                df_temp = pd.read_csv(file_path, sep="\t", compression="gzip", index_col=0)
+            expr_matrix = pd.DataFrame(data_series)
+            DataLoader._logger.info(f"探针级矩阵: {expr_matrix.shape[0]} 探针 × {expr_matrix.shape[1]} 样本")
 
-                meta_matrix_pack[datafile_name] = df_temp
+            # 映射探针到基因，丢弃无注释的行
+            mapped_genes = expr_matrix.index.map(probe_to_gene)
+            valid = mapped_genes.notna()
+            expr_matrix = expr_matrix.loc[valid]
+            mapped_genes = mapped_genes[valid]
+            DataLoader._logger.info(f"有基因注释的探针: {len(expr_matrix)} 行")
 
-                if strict_mode:
-                    # 和meta取交集
-                    common_samples = chosen_meta.index.intersection(df_temp.columns)
-                    matrix_aligned = df_temp[common_samples]
-                    meta_aligned = chosen_meta.loc[common_samples]
+            if expr_matrix.empty:
+                DataLoader._logger.warning("去除无基因名注释的探针后矩阵为空")
+                return None
 
-                    meta_matrix_pack[datafile_name] = {
-                        "matrix_aligned": matrix_aligned,
-                        "meta_aligned": meta_aligned
-                    }
+            # 聚合成基因级
+            expr_matrix = expr_matrix.astype(float)
+            gene_names = pd.Index(mapped_genes, name='_gene')
+            gene_matrix = expr_matrix.groupby(gene_names).mean()
+            DataLoader._logger.info(f"基因级矩阵: {gene_matrix.shape[0]} 基因 × {gene_matrix.shape[1]} 样本")
 
-                # 测试有没有所需所需基因数据
-                if debug:
-                    self._check_target_gene(df_temp, tar_gene)
+            data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
+            os.makedirs(data_dir, exist_ok=True)
+            file_name = f"{self.cfg.gse_id}_soft_extracted.txt"
+            file_path = safe_filepath(os.path.join(data_dir, file_name))
+            gene_matrix.to_csv(file_path, sep="\t")
+            DataLoader._logger.info(f"已保存至 {file_path}")
 
-            # 如果存在分组信息，则加入 group_info
-            if self._group_col is not None and self._group_mapping:
-                meta_matrix_pack['group_info'] = {
-                    'group_col': self._group_col,
-                    'mapping': self._group_mapping
-                }
-
-            if not meta_matrix_pack:
-                raise Exception("没有获取到任何有效矩阵")
-
-            if storage:
-                # 存储为pickle文件
-                save_path = os.path.join(data_dir, "pkl", f"{gse_id}_processed_pack.pkl")
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                pd.to_pickle(meta_matrix_pack, save_path)
-
-                if os.path.exists(save_path):
-                    DataLoader._logger.info(f"{gse_id}_processed_pack.pkl已存储完成！")
-
-            self._data = meta_matrix_pack
-            return meta_matrix_pack
+            return {file_name: file_path}
 
         except Exception as e:
-            DataLoader._logger.error(f"【未知错误】:{e}")
+            DataLoader._logger.error(f"从 SOFT 提取表达矩阵失败: {e}")
+            return None
 
-    def _check_target_gene(self, df, tar_gene):
-        try:
-            tar_data = pd.DataFrame()
-            if 'SYMBOL' in df.columns:
-                tar_data = df[df['SYMBOL'] == tar_gene]
-                if not tar_data.empty:
-                    print(f"在SYMBOL列中定位到{tar_gene}!")
-                else:
-                    # 试试大小写不敏感匹配
-                    tar_data = df[df['SYMBOL'].str.lower() == tar_gene.lower()]
-                    if not tar_data.empty:
-                        print(f"在SYMBOL列中定位到{tar_gene}(大小写模糊匹配)!")
+    def _save_matrix_memory(self, candidates: list, selected_idx: list) -> None:
+        """保存矩阵选择到记忆文件（与分组记忆共用同一文件）"""
+        memory_path = os.path.join(CONFIG_DIR, "group_memory.yaml")
+        memory = {}
+        if os.path.exists(memory_path):
+            with open(memory_path, "r", encoding="utf-8") as f:
+                memory = yaml.safe_load(f) or {}
+        gse = self.cfg.gse_id
+        memory.setdefault(gse, {})["matrices"] = [
+            os.path.basename(candidates[i]) for i in selected_idx
+        ]
+        with open(memory_path, "w", encoding="utf-8") as f:
+            yaml.dump(memory, f, allow_unicode=True, default_flow_style=False)
+        DataLoader._logger.info("矩阵选择已保存至记忆文件")
 
-            if not tar_data.empty:
-                print(f"--- {tar_gene}数据概览 ---")
-                print(tar_data)
+    def _load_matrix_memory(self, candidates: list) -> Optional[list]:
+        """从记忆文件加载矩阵选择，若记忆中的文件名仍在 candidates 中则返回对应索引"""
+        memory_path = os.path.join(CONFIG_DIR, "group_memory.yaml")
+        if not os.path.exists(memory_path):
+            return None
+        with open(memory_path, "r", encoding="utf-8") as f:
+            memory = yaml.safe_load(f) or {}
+        gse = self.cfg.gse_id
+        saved = memory.get(gse, {}).get("matrices")
+        if not saved:
+            return None
+        candidate_basenames = [os.path.basename(c) for c in candidates]
+        indices = []
+        for name in saved:
+            if name in candidate_basenames:
+                indices.append(candidate_basenames.index(name))
             else:
-                print(f"矩阵中存在SYMBOL列，但未找到名为'{tar_gene}'的行。")
-        except Exception as e:
-            print(f"Debug 过程中出现错误: {e}")
+                DataLoader._logger.warning(
+                    f"记忆中的矩阵文件 {name} 在当前候选列表中不存在，将回退到手动选择。"
+                )
+                return None
+        return indices if indices else None
+
 
 if __name__ == "__main__":
     test_gse_id = "GSE300437"
