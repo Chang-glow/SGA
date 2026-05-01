@@ -1,9 +1,10 @@
 **/__pycache__/
-.idea/
+/.idea/
+/.claude/
 /.venv/
 *.log
 /conf/config.yaml
-/conf/group_member.yaml
+/conf/group_memory.yaml
 /data/
 /error_logs/
 /outputs/
