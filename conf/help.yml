@@ -44,13 +44,14 @@ sections:
       - key: analysis_mode
         type: string
         default: diff
-        choices: [corr, diff, hilo, enrich, immune]
+        choices: [corr, diff, hilo, enrich, immune, wgcna]
         desc: |
           corr   — 相关性分析：目标基因与其他基因的 Pearson 相关
           diff   — 差异分析：Control vs Experiment 组间 Welch's t-test + FDR 校正
           hilo   — 高低表达分析：按目标基因中位表达分成 High/Low 组后差异比较
           enrich — 富集分析：对 diff/hilo 结果做 KEGG/GO 通路富集（需要先运行 diff/hilo）
           immune — 免疫浸润分析：用去卷积算法（TumorDecon）估算 22 种免疫细胞丰度
+          wgcna  — WGCNA数据准备：筛选高变异基因（~3000），输出 datExpr.csv 和 datTraits.csv 供R语言WGCNA包分析
 
       - key: version
         type: string
@@ -177,6 +178,20 @@ sections:
         desc: |
           去卷积算法。DeconRNASeq（最小二乘，速度快，默认推荐）。
           CIBERSORT 使用 NuSVR，每个样本需 10-30 秒但精度更高。
+
+  # ── WGCNA ── wgcna 模式 ──────────────────────────────────
+  - title: "WGCNA数据准备（仅 wgcna 模式使用）"
+    fields:
+      - key: （无额外配置项）
+        type: （无额外配置项）
+        default: （无额外配置项）
+        desc: |
+          wgcna 模式自动执行以下步骤：
+          1) 提取未经 log2 转换的原始标准化表达矩阵
+          2) 筛选方差最大的约 3000 个基因（若存在 diff/hilo 缓存则优先按 padj 筛选）
+          3) 输出 res/csv/{gse_id}_{tar_gene}_datExpr.csv —— 样本×基因表达矩阵
+          4) 输出 res/csv/{gse_id}_{tar_gene}_datTraits.csv —— 样本×性状矩阵（Group + {tar_gene}_exp）
+          5) 该模式不绘制图表，CSV 文件供 R 语言 WGCNA 包下游分析
 
   # ── 流程控制 ─────────────────────────────────────────────
   - title: "流程控制与输出"

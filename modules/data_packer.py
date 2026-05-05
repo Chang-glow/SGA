@@ -32,7 +32,7 @@ class DataPacker:
         if raw_meta is None or raw_meta.empty:
             raise ValueError("未能读取到 GEO 元数据")
 
-        if self.cfg.analysis_mode == "diff":
+        if self.cfg.analysis_mode in ("diff", "wgcna"):
             self._prepare_diff_group(raw_meta)
         elif self.cfg.analysis_mode == "hilo":
             self._prepare_hilo_group(raw_meta)
@@ -44,7 +44,7 @@ class DataPacker:
             raise RuntimeError("数据分组失败，无法构建数据包")
 
         chosen_meta = chosen_meta.copy()
-        if self.cfg.analysis_mode == "diff" and self._group_col is not None and self._group_mapping:
+        if self.cfg.analysis_mode in ("diff", "wgcna") and self._group_col is not None and self._group_mapping:
             chosen_meta["group"] = chosen_meta[self._group_col].apply(self._map_group)
             chosen_meta = chosen_meta[chosen_meta["group"].notna()]
 
@@ -424,8 +424,34 @@ class DataPacker:
         """保存处理后的数据包"""
         data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
         gse_id = self.cfg.gse_id
-        save_path = safe_filepath(os.path.join(data_dir, "pkl", f"{gse_id}_processed_pack.pkl"))
+        group_key = self.get_pack_group_key(self.cfg.analysis_mode)
+        save_path = safe_filepath(os.path.join(data_dir, "pkl", f"{gse_id}_{group_key}_processed_pack.pkl"))
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         pd.to_pickle(pack, save_path)
-        self._logger.info(f"{gse_id}_processed_pack.pkl已存储完成！")
+        self._logger.info(f"{gse_id}_{group_key}_processed_pack.pkl已存储完成！")
         return save_path
+
+    @staticmethod
+    def get_pack_group_key(analysis_mode: str) -> str:
+        """相同分组逻辑的模式共用 pack，返回分组键名"""
+        if analysis_mode in ("diff", "wgcna"):
+            return "diff_group"
+        elif analysis_mode == "hilo":
+            return "hilo_group"
+        return "default"
+
+    @staticmethod
+    def resolve_pack_path(data_dir: str, gse_id: str, analysis_mode: str) -> str:
+        """查找 pack 文件路径：新命名优先，回退旧命名（向后兼容）"""
+        group_key = DataPacker.get_pack_group_key(analysis_mode)
+        new_path = os.path.join(data_dir, "pkl", f"{gse_id}_{group_key}_processed_pack.pkl")
+        if os.path.exists(new_path):
+            return new_path
+        old_path = os.path.join(data_dir, "pkl", f"{gse_id}_{analysis_mode}_processed_pack.pkl")
+        if os.path.exists(old_path):
+            return old_path
+        # 最早命名（无模式前缀），如 GSE143318_processed_pack.pkl
+        legacy_path = os.path.join(data_dir, "pkl", f"{gse_id}_processed_pack.pkl")
+        if os.path.exists(legacy_path):
+            return legacy_path
+        return new_path

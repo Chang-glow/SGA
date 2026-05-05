@@ -72,6 +72,7 @@ class DataHandler:
     gene_diff_table: Optional[pd.DataFrame] = None
     gene_enrich_table: Optional[pd.DataFrame] = None
     gene_immune_table: Optional[pd.DataFrame] = None
+    gene_wgcna_table: Optional[pd.DataFrame] = None
 
 
 cs = ConfigStore.instance()

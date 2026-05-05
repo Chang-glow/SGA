@@ -41,6 +41,50 @@ _TUPLE_PATTERNS = {
 }
 
 
+def prepare_expr_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    """基因名列设为索引，仅保留数值列，按基因去重取均值"""
+    df = df.copy()
+
+    gene_col = None
+    for col in df.columns:
+        if col in ("Gene", "Symbol", "SYMBOL", "GeneSymbol", "gene_symbol",
+                   "Hugo_Symbol", "hugo", "Gene.Symbol", "GENE"):
+            gene_col = col
+            break
+    if gene_col is None:
+        for col in df.columns:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                gene_col = col
+                break
+
+    if gene_col is not None:
+        df = df.set_index(gene_col)
+
+    # 剔除残留的注释列（ENTREZID 等），仅保留样本表达列
+    _ANNO_KEYWORDS = [
+        'ensembl', 'entrezid', 'symbol', 'genename', 'probeid',
+        'id_ref', 'targetid', 'gene', 'description',
+    ]
+    sample_cols = [
+        c for c in df.columns
+        if not (isinstance(c, str) and any(k in c.lower() for k in _ANNO_KEYWORDS))
+    ]
+    df = df[sample_cols]
+
+    # 过滤基因索引中的注释类名称（如 ENTREZID 行）
+    df = df[~df.index.astype(str).str.lower().isin(
+        ["entrezid", "ensembl", "symbol", "probeid", "genename"]
+    )]
+
+    numeric_cols = df.select_dtypes(include=["number"]).columns
+    df = df[numeric_cols]
+
+    if df.index.duplicated().any():
+        df = df.groupby(df.index).mean()
+
+    return df
+
+
 def fetch_gene_vector(df, tar_gene) -> pd.Series:
     """提取目标基因向量
 
@@ -132,6 +176,7 @@ class Analyzer(ABC):
         self._diff_result: Optional[pd.DataFrame] = None
         self._hilo_result: Optional[pd.DataFrame] = None
         self._immune_result: Optional[pd.DataFrame] = None
+        self._wgcna_result: Optional[pd.DataFrame] = None
         self._strategy = self._get_strategy()
 
     @classmethod
@@ -139,7 +184,8 @@ class Analyzer(ABC):
         """根据cfg检查数据传入方式,创建分析对象"""
         data_dir = os.path.join(cfg.data_dir, cfg.gse_id)
 
-        pack_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_processed_pack.pkl")
+        from modules.data_packer import DataPacker
+        pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
 
         if cfg.analysis_mode == "enrich":
             return FileAnalyzer(cfg)
@@ -196,6 +242,8 @@ class Analyzer(ABC):
                 self._hilo_result = result
             elif mode == "immune":
                 self._immune_result = result
+            elif mode == "wgcna":
+                self._wgcna_result = result
             elif mode == "enrich":
                 pass
             if self.cfg.storage:
@@ -226,6 +274,9 @@ class Analyzer(ABC):
         elif mode == "immune":
             from .strategies.immune import ImmuneStrategy
             return ImmuneStrategy(self)
+        elif mode == "wgcna":
+            from .strategies.wgcna import WgcnaStrategy
+            return WgcnaStrategy(self)
         else:
             self._logger.error(f"不支持的分析模式: {mode}，请检查配置文件")
             raise ValueError(f"不支持的分析模式: {mode}")
@@ -427,13 +478,14 @@ class Analyzer(ABC):
         """清洗整个数据包,处理其中的DataFrame矩阵并保留非矩阵元数据"""
         if self._meta_matrix_pack is None:
             is_immune = self.cfg.analysis_mode == "immune"
+            skip_log = self.cfg.analysis_mode in ("immune", "wgcna")
             cleaned_pack = {}
             for name, item in raw_pack.items():
                 if name in {"meta", "meta_full"}:
                     cleaned_pack[name] = item.copy()
                 elif isinstance(item, dict):
                     if 'matrix_aligned' in item and isinstance(item['matrix_aligned'], pd.DataFrame):
-                        df = self._clean_dataframe(item['matrix_aligned'], skip_log=is_immune)
+                        df = self._clean_dataframe(item['matrix_aligned'], skip_log=skip_log)
                         if is_immune:
                             self._logger.info("正在进行 TPM 转换（免疫浸润分析预处理）...")
                             df = self._tpm_convert(df)
@@ -442,7 +494,7 @@ class Analyzer(ABC):
                         # 保留非矩阵形式的字典元数据，如 group_info 或其他配置
                         cleaned_pack[name] = item.copy()
                 elif isinstance(item, pd.DataFrame):
-                    df = self._clean_dataframe(item, skip_log=is_immune)
+                    df = self._clean_dataframe(item, skip_log=skip_log)
                     if is_immune:
                         self._logger.info("正在进行 TPM 转换（免疫浸润分析预处理）...")
                         df = self._tpm_convert(df)
@@ -517,7 +569,8 @@ class Analyzer(ABC):
             "diff": "differential",
             "hilo": "highlow",
             "enrich": "enrichment",
-            "immune": "immune"
+            "immune": "immune",
+            "wgcna": "wgcna"
         }
 
         # 构建文件名和路径
@@ -577,7 +630,8 @@ class FileAnalyzer(Analyzer):
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
-        self.data_path = os.path.join(data_dir, "pkl", f"{self.cfg.gse_id}_processed_pack.pkl")
+        from modules.data_packer import DataPacker
+        self.data_path = DataPacker.resolve_pack_path(data_dir, self.cfg.gse_id, self.cfg.analysis_mode)
         self._logger.info("将从打包的pkl中读取数据")
 
     def read_pkl(self) -> dict:

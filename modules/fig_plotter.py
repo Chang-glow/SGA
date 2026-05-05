@@ -36,7 +36,8 @@ class FigurePlotter(ABC):
     def create(cls, cfg: Config, data: DataHandler):
         """根据cfg检查使用哪个子类"""
         data_dir = os.path.join(cfg.data_dir, cfg.gse_id)
-        data_pack_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_processed_pack.pkl")
+        from modules.data_packer import DataPacker
+        data_pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
         gene_corr_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_correlation_summary.pkl")
         gene_diff_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_differential_summary.pkl")
         gene_hilo_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_highlow_summary.pkl")
@@ -54,6 +55,8 @@ class FigurePlotter(ABC):
             is_table = os.path.exists(gene_enrich_path)
         elif cfg.analysis_mode == "immune":
             is_table = os.path.exists(gene_immune_path)
+        elif cfg.analysis_mode == "wgcna":
+            is_table = True  # WGCNA 不生成图表，跳过
         else:
             cls._logger.warning(f"未知分析模式：{cfg.analysis_mode}，将默认使用数据包画图")
             is_table = False
@@ -118,6 +121,12 @@ class FigurePlotter(ABC):
             self.immune_stacked_bar()
             self.immune_box_plots()
             self.immune_corr_heatmap()
+        elif self.cfg.analysis_mode == "wgcna":
+            self._logger.info(
+                "WGCNA 模式：图表（模块-性状热图、eigengene 图、GO 富集等）"
+                "已由阶段2 PyWGCNA 管道生成至 res/figures/wgcna/，阶段3跳过。"
+            )
+            return
         else:
             self._logger.error(f"未知分析模式：{self.cfg.analysis_mode}，无法绘图")
             raise ValueError(f"未知分析模式：{self.cfg.analysis_mode}")
@@ -391,6 +400,10 @@ class FigurePlotter(ABC):
             expr_df = self._rename_expr_columns_by_meta_order(expr_df, full_meta)
 
         top_genes = data.sort_values('padj').head(20)['Gene'].tolist()
+        target_genes = parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
+        missing = [g for g in target_genes if g not in top_genes]
+        if missing:
+            top_genes = top_genes[:20 - len(missing)] + missing
         heatmap_df = self._match_top_genes_rows(expr_df, top_genes)
         if heatmap_df.empty:
             self._logger.warning('未找到用于热图的基因表达数据')
@@ -443,9 +456,9 @@ class FigurePlotter(ABC):
         )
 
         # clustermap 内部 tight_layout 会覆盖 cbar_pos → 先 subplots_adjust
-        # 留出空间，再 set_position 手动设 cbar 位置（左上角，2/5 长度）
+        # 留出空间，再 set_position 手动设 cbar 位置
         g.figure.subplots_adjust(top=0.90)
-        g.ax_cbar.set_position([0.03, 0.77, 0.015, 0.15])
+        g.ax_cbar.set_position([0.03, 0.80, 0.015, 0.15])
 
         # 在 col_colors 条上标注组别名 (Low / High)
         col_order = g.dendrogram_col.reordered_ind
@@ -1115,7 +1128,8 @@ class FigurePlotter(ABC):
                 continue
             self._logger.info(f"正在为基因集 {gs} 绘制柱状图...")
             try:
-                df = self._prepare_enrich_data(gs_df, max_label_len=55)
+                top_n = 10 if gs.startswith("KEGG") else 15
+                df = self._prepare_enrich_data(gs_df, top_term=top_n, max_label_len=55)
                 xlabel = "Combined Score" if "Combined Score" in gs_df.columns and gs_df["Combined Score"].nunique() > 1 else "-log10(Adjusted P-value)"
 
                 values = df["Score"].values
@@ -1163,7 +1177,8 @@ class FigurePlotter(ABC):
                 continue
             self._logger.info(f"正在为基因集 {gs} 绘制气泡图...")
             try:
-                df = self._prepare_enrich_data(gs_df, max_label_len=55)
+                top_n = 10 if gs.startswith("KEGG") else 15
+                df = self._prepare_enrich_data(gs_df, top_term=top_n, max_label_len=55)
 
                 gene_counts = df["Gene_Count"].values
                 min_size, max_size = 40, 350
@@ -1260,7 +1275,7 @@ class FigurePlotter(ABC):
         go_abbr = {"Biological": "BP", "Cellular": "CC", "Molecular": "MF"}
 
         n = len(go_sets)
-        fig, axes = plt.subplots(n, 1, figsize=(10, 4 * n), sharex=False)
+        fig, axes = plt.subplots(n, 1, figsize=(10, 2.8 * n), sharex=False)
         if n == 1:
             axes = [axes]
 
@@ -1434,7 +1449,8 @@ class FilePlotter(FigurePlotter):
             raise ValueError(f"未知分析模式：{self.cfg.analysis_mode}")
 
         summary_path = os.path.join(data_dir, "pkl", summary_name)
-        data_pack_path = os.path.join(data_dir, "pkl", f"{gse_id}_processed_pack.pkl")
+        from modules.data_packer import DataPacker
+        data_pack_path = DataPacker.resolve_pack_path(data_dir, gse_id, self.cfg.analysis_mode)
 
         if self.cfg.analysis_mode == "corr":
             self._gene_corr_table = pd.read_pickle(summary_path)

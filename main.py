@@ -10,6 +10,7 @@ from modules import DataLoader, Analyzer, FigurePlotter
 from modules.data_packer import DataPacker
 
 from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR, parse_user_input
+from utils.paths import BASE_DIR
 
 
 def _read_cfg_version(config_path: str) -> str | None:
@@ -124,6 +125,10 @@ def _init(cfg: Config) -> tuple:
 # 主函数
 @hydra.main(version_base=None, config_path=CONFIG_DIR, config_name="config")
 def main(cfg: Config):
+    # 相对路径基于项目根目录解析（Hydra 用 YAML 值覆盖了 __post_init__ 的解析结果）
+    if not os.path.isabs(cfg.data_dir):
+        cfg.data_dir = os.path.abspath(os.path.join(BASE_DIR, cfg.data_dir))
+
     data, logger = _init(cfg)
 
     while True:
@@ -132,7 +137,7 @@ def main(cfg: Config):
         # 阶段1: 数据获取与清洗
         if "1" in str(cfg.process):
             if cfg.analysis_mode != "enrich" and data.meta_matrix_pack is None:
-                data_pack_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_processed_pack.pkl")
+                data_pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
 
                 if os.path.exists(data_pack_path) and not cfg.debug:
                     logger.info(f"发现数据包：{data_pack_path}，跳过下载与清洗")
@@ -160,6 +165,8 @@ def main(cfg: Config):
                 logger.info("发现免疫浸润分析结果，跳过计算")
             elif cfg.analysis_mode == "enrich" and os.path.exists(os.path.join(data_dir, "pkl", f"{cfg.gse_id}_enrichment_summary.pkl")) and not cfg.debug:
                 logger.info("发现基因富集分析结果，跳过计算")
+            elif cfg.analysis_mode == "wgcna" and os.path.exists(os.path.join(data_dir, "pkl", f"{cfg.gse_id}_wgcna_summary.pkl")) and not cfg.debug:
+                logger.info("发现WGCNA分析结果，跳过计算")
             else:
                 logger.info("开始分析")
                 calculater = Analyzer.create(cfg, data)
@@ -172,6 +179,8 @@ def main(cfg: Config):
                     data.gene_hilo_table = result
                 elif cfg.analysis_mode == "immune":
                     data.gene_immune_table = result
+                elif cfg.analysis_mode == "wgcna":
+                    data.gene_wgcna_table = result
                 elif cfg.analysis_mode == "enrich":
                     if result is not None:
                         data.gene_enrich_table = result
@@ -202,7 +211,8 @@ def main(cfg: Config):
             "  3. 高低表达分析 (hilo)\n"
             "  4. 富集分析 (enrich)\n"
             "  5. 免疫浸润分析 (immune)\n"
-            "  6. 切换新数据集 \n(tips.若要修改GSE_ID和tar_gene以外的其他配置请重启本项目)\n"
+            "  6. WGCNA数据准备 (wgcna)\n"
+            "  7. 切换新数据集 \n(tips.若要修改GSE_ID和tar_gene以外的其他配置请重启本项目)\n"
             "---\n"
             "  0. 退出\n"
             + "=" * 48
@@ -214,7 +224,7 @@ def main(cfg: Config):
 
         choice = parse_user_input(
             prompt="请输入选项序号: ",
-            max_index=6,
+            max_index=7,
             whitelist="0",
         )
 
@@ -230,13 +240,13 @@ def main(cfg: Config):
                 break
 
         option = choice[0]
-        mode_map = {1: "corr", 2: "diff", 3: "hilo", 4: "enrich", 5: "immune"}
+        mode_map = {1: "corr", 2: "diff", 3: "hilo", 4: "enrich", 5: "immune", 6: "wgcna"}
 
         if option in mode_map:
             cfg.analysis_mode = mode_map[option]
             continue
 
-        if option == 5:
+        if option == 7:
             new_gse = input("请输入新的 GSE ID(如GSE123456): ").strip()
             if not new_gse:
                 print("GSE ID 不能为空，返回菜单。")

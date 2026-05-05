@@ -1,6 +1,8 @@
 import TumorDecon as td
 import pandas as pd
 
+from modules.calculater import prepare_expr_matrix
+
 
 class ImmuneStrategy:
     """免疫浸润分析策略，使用 TumorDecon 进行去卷积"""
@@ -38,7 +40,8 @@ class ImmuneStrategy:
         method_lower = method.lower()
 
         # 将基因名列设为索引（TumorDecon 要求 Hugo_Symbol 索引）
-        expr_df = self._prepare_expr_matrix(expr_df)
+        expr_df = prepare_expr_matrix(expr_df)
+        expr_df.index.name = "Hugo_Symbol"
 
         self._logger.info(
             f"使用 {method} 进行免疫浸润分析"
@@ -83,37 +86,3 @@ class ImmuneStrategy:
         result.index.name = "Sample"
         self._logger.info(f"免疫浸润分析完成，共 {result.shape[1]} 种免疫细胞类型")
         return result
-
-    @staticmethod
-    def _prepare_expr_matrix(df: pd.DataFrame) -> pd.DataFrame:
-        """将表达矩阵转为 TumorDecon 要求的格式（Hugo_Symbol 唯一索引，仅数值列）"""
-        df = df.copy()
-
-        # 找基因名列（非数值、非样本的注释列）
-        gene_col = None
-        for col in df.columns:
-            if col in ("Gene", "Symbol", "SYMBOL", "GeneSymbol", "gene_symbol",
-                       "Hugo_Symbol", "hugo", "Gene.Symbol", "GENE"):
-                gene_col = col
-                break
-        if gene_col is None:
-            # 回退：找第一列非数值的列
-            for col in df.columns:
-                if not pd.api.types.is_numeric_dtype(df[col]):
-                    gene_col = col
-                    break
-
-        if gene_col is not None:
-            df = df.set_index(gene_col)
-        df.index.name = "Hugo_Symbol"
-
-        # 只保留数值列
-        numeric_cols = df.select_dtypes(include=["number"]).columns
-        df = df[numeric_cols]
-
-        # 按基因名聚合去重（取均值），TumorDecon 要求唯一基因索引
-        if df.index.duplicated().any():
-            df = df.groupby(df.index).mean()
-            df.index.name = "Hugo_Symbol"
-
-        return df
