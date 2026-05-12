@@ -158,8 +158,8 @@ def _print_config_and_exit() -> None:
         label = f"  {k}"
         print(f"{label:36s} = {_format_val(val)}")
     print("=" * width)
-    print("更多用法: python main.py config <key>    查询单个配置项")
-    print("         python main.py config --all      查看全部配置")
+    print("更多用法: SGA config <key>    查询单个配置项")
+    print("         SGA config --all      查看全部配置")
     print("=" * width)
     sys.exit(0)
 

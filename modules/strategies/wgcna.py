@@ -52,7 +52,7 @@ class WgcnaStrategy:
         expr_df = prepare_expr_matrix(expr_df)
         self._logger.info(f"表达矩阵: {expr_df.shape[0]} 基因 × {expr_df.shape[1]} 样本")
 
-        n_genes = 3000
+        n_genes = getattr(self.cfg, "wgcna_top_n_genes", 3000)
         filtered_df = self._filter_top_genes(expr_df, tar_expr, n_genes)
 
         # 转置: 样本(行) × 基因(列)

@@ -167,7 +167,8 @@ class DiffStrategy:
 
         control_count = np.sum(~np.isnan(control_values), axis=1)
         exp_count = np.sum(~np.isnan(exp_values), axis=1)
-        valid_mask = (control_count >= 3) & (exp_count >= 3)
+        min_samples = getattr(self.cfg, "min_samples_per_group", 3)
+        valid_mask = (control_count >= min_samples) & (exp_count >= min_samples)
 
         if not np.any(valid_mask):
             self._logger.error("没有足够的样本值进行差异分析")

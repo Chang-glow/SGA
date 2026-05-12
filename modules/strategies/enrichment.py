@@ -14,7 +14,11 @@ _PROBE_PREFIXES = (
     "ILMN_", "AFFY-", "A_", "CUST_", "GE_", "TC0", "TC1",
     "Hs.", "Mm.", "Rn.", "DDB_", "ENS", "FBgn_",
 )
-_MIN_GENES_FALLBACK = 10
+_MIN_GENES_FALLBACK_DEFAULT = 10
+
+
+def _get_min_genes_fallback(cfg) -> int:
+    return getattr(cfg, "enrichment_min_genes_fallback", _MIN_GENES_FALLBACK_DEFAULT)
 
 
 class EnrichStrategy:
@@ -223,10 +227,11 @@ class EnrichStrategy:
         strictly_significant = len(filtered)
 
         # 如果显著基因太少，回退到按 |log2FC| 排名取 top N
-        if strictly_significant < _MIN_GENES_FALLBACK:
+        min_fallback = _get_min_genes_fallback(self.cfg)
+        if strictly_significant < min_fallback:
             self._logger.warning(
                 f"padj < {p_thr} 仅筛出 {strictly_significant} 个基因，"
-                f"不足 {_MIN_GENES_FALLBACK}，将回退为按 |log2FC| 排名取前 {max_genes} 个。"
+                f"不足 {min_fallback}，将回退为按 |log2FC| 排名取前 {max_genes} 个。"
             )
             fallback = df.drop_duplicates(subset="Gene").copy()
             if "log2FC" in fallback.columns:

@@ -278,7 +278,8 @@ class FigurePlotter(ABC):
     def _save_plot(self, fig_name: str) -> None:
         # 保存图片
         fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        dpi = getattr(self.cfg, "figure_dpi", 300)
+        plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
         plt.close()
 
     def box_plotter(self) -> None:
@@ -352,7 +353,7 @@ class FigurePlotter(ABC):
                    edgecolors="none", label=f"Up (log2FC ≥ {log2fc_thr})", zorder=2)
 
         # 标注 top N 显著基因
-        label_n = 15
+        label_n = getattr(self.cfg, "volcano_top_n_labels", 15)
         top_genes = data[sig_up | sig_down].nsmallest(label_n, "padj")
         for _, row in top_genes.iterrows():
             ax.annotate(
@@ -399,11 +400,12 @@ class FigurePlotter(ABC):
         if full_meta is not None:
             expr_df = self._rename_expr_columns_by_meta_order(expr_df, full_meta)
 
-        top_genes = data.sort_values('padj').head(20)['Gene'].tolist()
+        top_n = getattr(self.cfg, "heatmap_top_n_genes", 20)
+        top_genes = data.sort_values('padj').head(top_n)['Gene'].tolist()
         target_genes = parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
         missing = [g for g in target_genes if g not in top_genes]
         if missing:
-            top_genes = top_genes[:20 - len(missing)] + missing
+            top_genes = top_genes[:top_n - len(missing)] + missing
         heatmap_df = self._match_top_genes_rows(expr_df, top_genes)
         if heatmap_df.empty:
             self._logger.warning('未找到用于热图的基因表达数据')
@@ -486,7 +488,7 @@ class FigurePlotter(ABC):
 
         fig_name = self._build_fig_name("heatmap.png")
         fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        g.savefig(fig_path, dpi=300, bbox_inches="tight")
+        g.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
         plt.close(g.figure)
         self._logger.info("热图绘制完成（聚类 + 分组注释）")
 
@@ -781,7 +783,7 @@ class FigurePlotter(ABC):
 
         fig.tight_layout()
         fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
         plt.close(fig)
         self._logger.info(f"堆叠柱状图已保存至 {fig_path}")
 
@@ -877,7 +879,7 @@ class FigurePlotter(ABC):
         """绘制免疫箱线图网格（通用：全量版 / 过滤版复用）"""
         exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
         n = len(cell_types)
-        n_cols = 5
+        n_cols = getattr(self.cfg, "immune_boxplot_n_cols", 5)
         n_rows = (n + n_cols - 1) // n_cols
 
         fig, axes = plt.subplots(n_rows, n_cols,
@@ -910,7 +912,7 @@ class FigurePlotter(ABC):
                      fontsize=13, fontweight="bold", y=1.01)
         fig.tight_layout()
         fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
         plt.close(fig)
         self._logger.info(f"免疫浸润箱线图已保存至 {fig_path}")
 
@@ -960,13 +962,14 @@ class FigurePlotter(ABC):
         self._draw_immune_box_grid(immune_df, groups, cell_types_sorted,
                                    p_adj, self._build_fig_name("boxplot.png"))
 
-        # 4) 过滤版：剔除两边组中位数均 < 0.001 的细胞类型
+        # 4) 过滤版：剔除两边组中位数均低于阈值的细胞类型
+        low_thr = getattr(self.cfg, "immune_low_abundance_threshold", 0.001)
         cell_types_filtered = []
         for ct in cell_types_sorted:
             ctrl_med = immune_df.loc[groups == "Control", ct].median()
             exp_med = immune_df.loc[groups == exp_type, ct].median()
-            if (pd.notna(ctrl_med) and ctrl_med >= 0.001) or \
-               (pd.notna(exp_med) and exp_med >= 0.001):
+            if (pd.notna(ctrl_med) and ctrl_med >= low_thr) or \
+               (pd.notna(exp_med) and exp_med >= low_thr):
                 cell_types_filtered.append(ct)
 
         if len(cell_types_filtered) < len(cell_types_sorted):
@@ -1072,7 +1075,7 @@ class FigurePlotter(ABC):
         fig.tight_layout()
         fig_name = self._build_fig_name("heatmap.png")
         fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
         plt.close(fig)
         self._logger.info(f"免疫相关性热图已保存至 {fig_path}"
                           + (f" (跳过基因: {skipped})" if skipped else ""))
@@ -1119,7 +1122,7 @@ class FigurePlotter(ABC):
 
     def _enrich_save(self, fig, fig_path: str):
         fig_path = self._resolve_save_path(fig_path)
-        fig.savefig(fig_path, dpi=300, bbox_inches="tight", facecolor="white")
+        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
     def enrich_bar_plotter(self) -> None:
@@ -1140,7 +1143,7 @@ class FigurePlotter(ABC):
                 continue
             self._logger.info(f"正在为基因集 {gs} 绘制柱状图...")
             try:
-                top_n = 10 if gs.startswith("KEGG") else 15
+                top_n = getattr(self.cfg, "enrich_plot_top_terms", 15)
                 df = self._prepare_enrich_data(gs_df, top_term=top_n, max_label_len=55)
                 xlabel = "Combined Score" if "Combined Score" in gs_df.columns and gs_df["Combined Score"].nunique() > 1 else "-log10(Adjusted P-value)"
 
@@ -1189,7 +1192,7 @@ class FigurePlotter(ABC):
                 continue
             self._logger.info(f"正在为基因集 {gs} 绘制气泡图...")
             try:
-                top_n = 10 if gs.startswith("KEGG") else 15
+                top_n = getattr(self.cfg, "enrich_plot_top_terms", 15)
                 df = self._prepare_enrich_data(gs_df, top_term=top_n, max_label_len=55)
 
                 gene_counts = df["Gene_Count"].values
@@ -1265,7 +1268,8 @@ class FigurePlotter(ABC):
             except Exception as e:
                 self._logger.error(f"{gs} 气泡图绘制失败: {e}")
 
-    def enrich_go_combined_bar(self, top_term: int = 10) -> None:
+    def enrich_go_combined_bar(self) -> None:
+        top_term = getattr(self.cfg, "enrich_plot_top_terms", 15)
         """GO 三合一子图 — BP/MF/CC 各画条形图，垂直拼接，右侧图例"""
         if self._gene_enrich_table is None:
             self._load_data()

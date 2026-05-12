@@ -32,7 +32,7 @@ class CorrelationStrategy:
             target_vec = fetch_gene_vector(df, tar_gene)
 
             self._logger.info("将以常见标识物分类进行计算并储存")
-            for category, gene_list in self.analyzer.hfm_dict.items():
+            for category, gene_list in self.analyzer._get_hfm_dict().items():
                 for gene in gene_list:
                     self._logger.debug(f"提取标识物基因{gene}的数据中...")
                     marker_vec = fetch_gene_vector(df, gene)

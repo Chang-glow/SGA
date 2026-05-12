@@ -161,6 +161,13 @@ class Analyzer(ABC):
         "Apoptosis": ["Fas", "Fasl", "Bcl2", "Trp53"],
         "Hedgehog": ["Ptch1", "Smo"]
     }
+
+    def _get_hfm_dict(self) -> dict:
+        """返回自定义或默认标志物基因集"""
+        custom = getattr(self.cfg, "custom_marker_dict", None)
+        if custom and any(custom.values()):
+            return custom
+        return self.hfm_dict
     _logger = loggers.get_logger()
 
     def __init__(self, cfg: Config):
@@ -526,21 +533,21 @@ class Analyzer(ABC):
                 df = self.calculate()
             else:
                 df = self._corr_result
-            significant_findings = df[df['P_value'] < 0.05].sort_values('R')
+            significant_findings = df[df['P_value'] < self.cfg.p_threshold].sort_values('R')
         
         elif self.cfg.analysis_mode in ["diff", "hilo"]:
             if self._diff_result is None and self._hilo_result is None:
                 df = self.calculate()
             else:
                 df = self._diff_result if self._diff_result is not None else self._hilo_result
-            significant_findings = df[df['padj'] < 0.05].sort_values('log2FC')
+            significant_findings = df[df['padj'] < self.cfg.p_threshold].sort_values('log2FC')
 
         elif self.cfg.analysis_mode == "enrich":
             if self._analysis_result is None or self._analysis_result.empty:
                 df = self.calculate()
             else:
                 df = self._analysis_result
-            significant_findings = df[df.get('Adjusted P-value', pd.Series(dtype=float)) < 0.05].sort_values('Adjusted P-value')
+            significant_findings = df[df.get('Adjusted P-value', pd.Series(dtype=float)) < self.cfg.p_threshold].sort_values('Adjusted P-value')
         
         else:
             self._logger.error(f"不支持的分析模式: {self.cfg.analysis_mode}，请检查配置文件")

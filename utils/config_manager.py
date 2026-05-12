@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from hydra.core.config_store import ConfigStore
 
 from utils.paths import DATA_DIR
@@ -32,19 +32,29 @@ class Config:
         "GO_Cellular_Component_2025",
     ])
     organism: str = "human"
+    enrichment_min_genes_fallback: int = 10  # 显著基因不足时回退到 |log2FC| 排序
     strict_filter: bool = True
     log2fc_threshold: float = 0.0
     max_input_genes: int = 500
     max_output_genes: int = 0
+    min_samples_per_group: int = 3   # t-test / 免疫检验最小样本数
     gene_blacklist: List[str] = field(default_factory=list)
     group_memory_enabled: bool = False
     group_memory_use: bool = False
     tar_tuple: str = ""
+    custom_marker_dict: Dict[str, List[str]] = field(default_factory=dict)  # 相关性分析自定义标志物基因集
     immune_method: str = "DeconRNASeq"
+    immune_low_abundance_threshold: float = 0.001  # 免疫低丰度细胞过滤阈值
     multi_gene: str = ""           # 多基因：逗号分隔 OR 文件路径（每行一个基因）
     overwrite_figures: bool = False  # 默认不覆盖，迭代 (1)(2)...
+    figure_dpi: int = 300            # 图片分辨率
+    volcano_top_n_labels: int = 15   # 火山图标注基因数
+    heatmap_top_n_genes: int = 20    # 热图展示 top DEG 数
+    immune_boxplot_n_cols: int = 5   # 免疫箱线图每行子图数
+    enrich_plot_top_terms: int = 15  # 富集图展示 top term 数
     plot_data_warning: bool = True   # 画图数据合理性 warning 开关（通用）
     process: str = "123"
+    wgcna_top_n_genes: int = 3000    # WGCNA 筛选基因数
 
     def __post_init__(self):
         # 互斥检查

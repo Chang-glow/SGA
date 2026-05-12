@@ -147,6 +147,36 @@ plot_data_warning: true          # 画图数据合理性 warning（ssGSEA/SingSc
 | 肥大细胞 | Mast cells resting, Mast cells activated |
 | 粒细胞 | Eosinophils, Neutrophils |
 
+## 示例
+
+以下示例基于 `GSE143318`，目标基因 `APEX1`，`immune_method: "DeconRNASeq"`。
+
+### 输入
+
+表达矩阵：27 个样本 × 基因，TPM 归一化后与 LM22 签名矩阵（547 基因 × 22 细胞类型）取基因重叠，对每个样本解二次规划。
+
+### 输出：免疫浸润结果表（`res/csv/GSE143318_immune_summary.csv`）
+
+```csv
+B cells naive,B cells memory,Plasma cells,T cells CD8,...
+0.0,0.0892,0.1128,0.0,...
+0.0,0.0343,0.1203,0.0,...
+0.0609,0.0,0.1396,0.0,...
+...
+```
+
+### 输出：堆叠柱状图
+
+![immune stacked bar](images/immune_stacked_bar.png)
+
+### 输出：箱线图
+
+![immune boxplot](images/immune_boxplot.png)
+
+### 输出：相关性热图
+
+![immune heatmap](images/immune_heatmap.png)
+
 ## 常见问题
 
 ### Q: 使用 ssGSEA 或 SingScore 时，堆叠柱状图 warning 是什么意思？

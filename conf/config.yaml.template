@@ -1,51 +1,77 @@
+# ============================================================
+# SGA v0.3.3 配置模板
+# setup.sh 将以此模板生成 config.yaml，也可手动复制后修改
+# 运行 SGA config 查看当前值
+# 运行 SGA help 查看所有配置项参考
+# ============================================================
+
+# ── 基础设置 ──
 version: "0.3.3"
-tar_gene: GENE
-gse_id: GSE123456
+gse_id: GSE123456              # 替换为你的 GEO accession
+tar_gene: GENE                 # 替换为目标基因名（与 multi_gene 互斥）
+multi_gene: ""                 # 多基因：逗号分隔或文件路径
+analysis_mode: diff            # corr / diff / hilo / enrich / immune / wgcna
 data_dir: data
+process: '123'                 # 1=下载 2=分析 3=画图，可组合
+
+# ── 分组设置 ──
 group_select_col: source_name_ch1
 control_label: ['control']
 exp_label: ['CCl4']
 exp_type: "Fibrosis"
-analysis_mode: "diff" 
-storage: true
-strict_mode: false
-debug: false
-p_threshold: 0.05
-log_threshold: 10
-strict_filter: true
-signs:
-- positive
-- negative
+group_memory_enabled: false
+group_memory_use: false
 
-# Enrichment analysis (for analysis_mode: "enrich")
-enrichment_source_mode: "diff"
+# ── 统计与过滤 ──
+p_threshold: 0.05
+strict_filter: true            # true=padj 过滤 / false=P_value + log2FC
+log2fc_threshold: 0.5
+max_output_genes: 0            # 0=不限制
+min_samples_per_group: 3
+gene_blacklist: []
+signs:
+  - positive
+  - negative
+log_threshold: 10
+tar_tuple: ""
+
+# ── 相关性分析 ──
+# 自定义标志物基因集。留空 {} 则使用内置肝纤维化 hfm_dict
+custom_marker_dict: {}
+
+# ── 富集分析 ──
+enrichment_source_mode: diff
 enrichment_gene_sets:
   - KEGG_2026
   - GO_Biological_Process_2025
   - GO_Molecular_Function_2025
   - GO_Cellular_Component_2025
-organism: "human"
-log2fc_threshold: 0.5
+organism: human
 max_input_genes: 500
-max_output_genes: 0
-gene_blacklist: []
-group_memory_enabled: false
-group_memory_use: false
-tar_tuple: ""
-process: "123"
+enrichment_min_genes_fallback: 10
 
-# 多基因模式（与 tar_gene 互斥，二选一）
-# 支持逗号分隔: multi_gene: "APEX1,TP53,TGFB1"
-# 支持文件输入: multi_gene: "/path/to/gene_list.txt"（每行一个基因，# 开头为注释）
-# multi_gene: ""
+# ── 免疫浸润分析 ──
+immune_method: "DeconRNASeq"           # DeconRNASeq / CIBERSORT / ssGSEA / SingScore
+plot_data_warning: true                # 数据与图表假设不匹配时警告
+immune_low_abundance_threshold: 0.001  # 箱线图低丰度细胞过滤阈值
 
-# 图片覆盖模式：true=直接覆盖，false=迭代编号 (1)(2)...
+# ── WGCNA ──
+wgcna_top_n_genes: 3000
+
+# ── 图表设置 ──
+figure_dpi: 300
+volcano_top_n_labels: 15       # 火山图标注的 top 基因数
+heatmap_top_n_genes: 20        # 热图展示的 top DEG 数
+immune_boxplot_n_cols: 5       # 免疫箱线图每行子图数
+enrich_plot_top_terms: 15      # 富集图展示的 top term 数
 overwrite_figures: false
 
-# 免疫浸润去卷积方法: cibersort / DeconRNASeq / ssGSEA / SingScore
-immune_method: "DeconRNASeq"
+# ── 存储与调试 ──
+storage: true
+debug: false
+strict_mode: false
 
-# hydra配置
+# ── Hydra 日志 ──
 hydra:
   job_logging:
     handlers:
