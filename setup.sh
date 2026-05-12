@@ -48,27 +48,67 @@ else
     echo ""
 fi
 
-# 4. 注册 SGA 命令到 ~/.bashrc
-BASHRC="${HOME}/.bashrc"
-MARKER="# >>> SGA command >>>"
-if grep -q "${MARKER}" "${BASHRC}" 2>/dev/null; then
-    echo "[!] SGA 命令已注册，跳过。"
-else
-    echo "[→] 正在注册 SGA 命令到 ~/.bashrc..."
-    cat << 'EOF' >> "${BASHRC}"
-
-# >>> SGA command >>>
-SGA() {
-    conda run -n SGA python SGA_DIR_PLACEHOLDER/main.py "$@"
-}
-# <<< SGA command <<<
-EOF
-    # 替换路径占位符为实际路径
-    sed -i "s|SGA_DIR_PLACEHOLDER|${SGA_DIR}|g" "${BASHRC}"
-    echo "[✓] SGA 命令已注册。"
+# 4. 恢复卸载时保留的内容
+BACKUP_DIR="${HOME}/SGA_backup"
+if [ -d "${BACKUP_DIR}" ]; then
+    echo "[→] 检测到 SGA 备份目录: ${BACKUP_DIR}"
+    if [ -t 0 ]; then
+        for SUBDIR in conf data res; do
+            SRC="${BACKUP_DIR}/${SUBDIR}"
+            if [ -d "${SRC}" ]; then
+                read -p "  是否恢复 ${SUBDIR}/ 目录？[y/N]: " -r RESTORE
+                if [[ "${RESTORE}" =~ ^[Yy]$ ]]; then
+                    cp -r "${SRC}" "${SGA_DIR}/${SUBDIR}"
+                    echo "    [✓] 已恢复 ${SUBDIR}/"
+                fi
+            fi
+        done
+        echo "[✓] 备份恢复完成。"
+    else
+        echo "[!] 非交互模式，跳过恢复。手动恢复: cp -r ${BACKUP_DIR}/* ${SGA_DIR}/"
+    fi
 fi
 
-# 5. 安装 TumorDecon（免疫浸润分析依赖）
+# 5. 注册 SGA 命令到 ~/.local/bin
+BIN_DIR="${HOME}/.local/bin"
+SGA_BIN="${BIN_DIR}/SGA"
+if [ -x "${SGA_BIN}" ]; then
+    echo "[!] SGA 命令已注册 (${SGA_BIN})，跳过。"
+else
+    echo "[→] 正在注册 SGA 命令到 ~/.local/bin..."
+    mkdir -p "${BIN_DIR}"
+    cat > "${SGA_BIN}" << EOF
+#!/usr/bin/env bash
+# SGA (Simple GEO Analyzer) command
+conda run -n SGA python ${SGA_DIR}/main.py "\$@"
+EOF
+    chmod +x "${SGA_BIN}"
+    echo "[✓] SGA 可执行脚本已写入: ${SGA_BIN}"
+
+    # 确保 ~/.local/bin 在 PATH 中
+    MARKER="# >>> SGA bin path >>>"
+    if ! echo "${PATH}" | tr ':' '\n' | grep -qFx "${BIN_DIR}"; then
+        # 优先写 ~/.bash_profile（如果存在），否则写 ~/.profile
+        if [ -f "${HOME}/.bash_profile" ]; then
+            PROFILE="${HOME}/.bash_profile"
+        else
+            PROFILE="${HOME}/.profile"
+        fi
+        if ! grep -q "${MARKER}" "${PROFILE}" 2>/dev/null; then
+            cat >> "${PROFILE}" << EOP
+
+${MARKER}
+export PATH="${BIN_DIR}:\${PATH}"
+# <<< SGA bin path <<<
+EOP
+            echo "[✓] PATH 已追加到 ${PROFILE}"
+        fi
+    else
+        echo "[✓] ~/.local/bin 已在 PATH 中，无需修改。"
+    fi
+fi
+
+# 6. 安装 TumorDecon（免疫浸润分析依赖）
 echo "[→] 安装 TumorDecon（免疫浸润分析依赖）..."
 conda run -n SGA pip install TumorDecon 2>/dev/null || {
     echo "[!] TumorDecon 安装失败（可能需要手动安装），忽略。"
@@ -79,8 +119,9 @@ echo "========================================"
 echo "  安装完成！"
 echo "========================================"
 echo ""
-echo "  请执行以下命令使 SGA 命令生效："
-echo "    source ~/.bashrc"
+echo "  如果 ~/.local/bin 新加入 PATH，请执行："
+echo "    source ~/.profile"
+echo "  （或重新打开终端）"
 echo ""
 echo "  使用前请先编辑配置文件："
 echo "    vim conf/config.yaml"
