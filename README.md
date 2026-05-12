@@ -1,4 +1,4 @@
-# **SGA: Simple GEO Analyzer (v1.3.1)**
+# **SGA: Simple GEO Analyzer (v0.3.3)**
 
 **SGA** 是一个为生信初学者日常科研设计的轻量级、自动化 GEO 数据处理工具。它将 GEO 数据下载、清洗、分析与可视化流程集成在一起，可以快速从 GEO 原始数据得到差异分析或相关性结果。
 
@@ -8,10 +8,12 @@
 
 - **自动流水线**：GSE ID → 下载 → 清洗 → 分析 → 画图
 - **缓存机制**：跳过重复下载/计算
-- **五种分析模式**：分组差异分析`diff` / 与常见标志物相关性分析`corr` / HighLow分析`hilo` / 通路富集`enrich` / 免疫浸润`immune`
+- **六种分析模式**：分组差异分析`diff` / 相关性分析`corr` / 高低表达分析`hilo` / 通路富集`enrich` / 免疫浸润`immune` / 加权基因共表达网络`wgcna`
 - **可视化**：箱线图、聚类热图、散点拟合线、堆叠柱状图、相关性热图、火山图、气泡图
+- **免疫浸润**：四种去卷积算法（DeconRNASeq、CIBERSORT、ssGSEA、SingScore），纯 Python 无 R 依赖
 - **智能分组 + 分组记忆**
 - **Hydra 配置驱动**，命令行覆盖
+- **config 子命令**：快速查看/查询当前配置
 
 ---
 
@@ -20,29 +22,39 @@
 ```
 SGA/
 ├── main.py                      # 项目入口，调度数据下载、分析与可视化流程
-├── conf/                        # Hydra 配置文件存放目录
-│   ├── config.yaml.template     # 配置模板文件
-│   └── config.yaml              # 实际运行配置（由 setup.sh 生成）
-├── modules/                     # 核心功能模块
+├── conf/                         # Hydra 配置文件存放目录
+│   ├── config.yaml.template      # 配置模板文件
+│   ├── config.yaml               # 实际运行配置（由 setup.sh 生成）
+│   └── help.yml                  # 自定义帮助信息
+├── doc/                          # 文档
+├── modules/                      # 核心功能模块
 │   ├── __init__.py
-│   ├── data_loader.py           # GEO 数据下载、矩阵加载、分组与缓存打包
-│   ├── calculater.py            # 差异分析与相关性分析逻辑
-│   └── fig_plotter.py           # 差异箱线图与相关性散点图绘制
-├── utils/                       # 工具模块
+│   ├── data_loader.py            # GEO 数据下载、矩阵加载、分组与缓存打包
+│   ├── data_packer.py            # 数据打包/解包
+│   ├── calculater.py             # 差异分析、相关性分析、免疫浸润等计算逻辑
+│   ├── fig_plotter.py            # 差异箱线图、相关性散点图、免疫浸润图等绘制
+│   └── strategies/               # 分析策略（按模式分文件）
+│       ├── correlation.py
+│       ├── difference.py
+│       ├── highlow.py
+│       ├── enrichment.py
+│       ├── immune.py
+│       └── wgcna.py
+├── utils/                        # 工具模块
 │   ├── __init__.py
-│   ├── config_manager.py        # Hydra 配置映射与数据传递对象
-│   ├── loggers.py               # 日志配置与记录
-│   ├── parse_user_input.py      # 交互式输入解析
-│   └── paths.py                 # 项目路径管理与目录初始化
-├── data/                        # 下载的原始数据与缓存数据包
-├── error_logs/                  # 运行时错误日志
-├── res/                         # 可视化输出目录
-│   ├── csv/                     # CSV 结果表格
-│   └── figures/                 # 绘制图像存放位置（按分析模式分子目录）
-├── environment.yml              # Conda 环境配置
-├── setup.sh                     # 一键安装脚本
-├── requirements.txt             # Python 依赖清单
-└── README.md                    # 项目说明文档
+│   ├── config_manager.py         # Hydra 配置映射与数据传递对象
+│   ├── loggers.py                # 日志配置与记录
+│   ├── parse_user_input.py       # 交互式输入解析
+│   └── paths.py                  # 项目路径管理与目录初始化
+├── data/                         # 下载的原始数据与缓存数据包
+├── error_logs/                   # 运行时错误日志
+├── res/                          # 可视化输出目录
+│   ├── csv/                      # CSV 结果表格
+│   └── figures/                  # 绘制图像存放位置（按分析模式分子目录）
+├── environment.yml               # Conda 环境配置
+├── setup.sh                      # 一键安装脚本
+├── requirements.txt              # Python 依赖清单
+└── README.md                     # 项目说明文档
 ```
 
 ---
@@ -67,6 +79,14 @@ cp conf/config.yaml.template conf/config.yaml  # 手动生成配置
 python main.py help                            # 查看所有配置项参考(该安装方式下无SGA命令)
 ```
 
+### 查看当前配置
+
+```bash
+python main.py config               # 核心配置摘要
+python main.py config --all         # 全部配置
+python main.py config immune_method # 查询单个配置项
+```
+
 ### 运行分析
 
 ```bash
@@ -77,6 +97,7 @@ SGA tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune
 
 ```bash
 SGA tar_gene=Acta2 gse_id=GSE123456 analysis_mode=diff
+SGA tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune immune_method=ssGSEA
 ```
 
 执行 `SGA help` 查看所有配置项的完整参考。
@@ -96,7 +117,9 @@ SGA tar_gene=Acta2 gse_id=GSE123456 analysis_mode=diff
 - 如果目标数据集包含多个补充矩阵，程序会提示选择需要加载的文件。
 - 如果自动分组失败，会进入交互式分组流程，手动选择目标组。
 - 表达矩阵若未 log 转换，程序会自动执行 `log2(x + 1)`。
-- 特别的，免疫浸润等需要原始数据的策略不会进行自动 log 。
+- 免疫浸润分析等需要原始数据的策略不会进行自动 log 转换。
+- 免疫浸润使用 ssGSEA 或 SingScore 时，堆叠柱状图会提示数据非比例（可通过 `plot_data_warning: false` 关闭提示）。详见 `doc/immune_infiltration.md`。
+
 ---
 
 ## **🤝 贡献与反馈**
@@ -105,6 +128,6 @@ SGA tar_gene=Acta2 gse_id=GSE123456 analysis_mode=diff
 
 ---
 
-### **注：本项目由 Claude code 参与辅助开发** 
+### **注：本项目由 Claude code 参与辅助开发**
 
-*📅 Update at: 2026-05-01*
+*📅 Update at: 2026-05-12*

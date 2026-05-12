@@ -11,7 +11,7 @@ from utils.paths import DATA_DIR
 class Config:
     tar_gene: str = ""
     gse_id: str = ""
-    version: str = "1.0"
+    version: str = "0.3.3"
     group_select_col: Optional[str] = "source_name_ch1"
     control_label: Optional[List[str]] = field(default_factory=lambda: ["control"])
     exp_label: Optional[List[str]] = field(default_factory=lambda: ["CCl4"])
@@ -43,6 +43,7 @@ class Config:
     immune_method: str = "DeconRNASeq"
     multi_gene: str = ""           # 多基因：逗号分隔 OR 文件路径（每行一个基因）
     overwrite_figures: bool = False  # 默认不覆盖，迭代 (1)(2)...
+    plot_data_warning: bool = True   # 画图数据合理性 warning 开关（通用）
     process: str = "123"
 
     def __post_init__(self):

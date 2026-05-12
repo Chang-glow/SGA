@@ -856,6 +856,18 @@ class FigurePlotter(ABC):
         immune_df = immune_df.loc[valid[valid].index]
         groups = groups[valid]
 
+        # 检测数据是否接近比例（行和 ≈ 1），偏离时警告用户
+        if getattr(self.cfg, "plot_data_warning", True):
+            row_sums = immune_df.sum(axis=1)
+            median_sum = row_sums.median()
+            if median_sum < 0.9 or median_sum > 1.1:
+                self._logger.warning(
+                    f"数据未经过比例归一化（各样本行和中位数={median_sum:.3f}，"
+                    f"偏离 1），堆叠柱状图的 Y 轴 \"Cell Fraction (%)\" 可能"
+                    f"无意义。若您的反卷积方法输出富集分数而非比例，这是正常现象。"
+                    f"设置 plot_data_warning: false 可关闭此提示。"
+                )
+
         exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
         title = f"Immune Cell Composition — {self.cfg.tar_gene} ({self.cfg.gse_id})"
         fig_name = self._build_fig_name("stacked_bar.png")

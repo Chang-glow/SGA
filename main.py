@@ -92,6 +92,78 @@ def _print_custom_help_and_exit() -> None:
     sys.exit(0)
 
 
+def _get_nested(d: dict, key: str):
+    """按点号分隔 key 访问嵌套字典，不存在返回 None"""
+    parts = key.split(".")
+    for p in parts:
+        if isinstance(d, dict) and p in d:
+            d = d[p]
+        else:
+            return None
+    return d
+
+
+def _format_val(v) -> str:
+    """将 YAML 值格式化为可打印字符串"""
+    if isinstance(v, (list, dict)):
+        return yaml.dump(v, default_flow_style=True, allow_unicode=True).strip()
+    return str(v)
+
+
+_CORE_KEYS = [
+    "version", "gse_id", "tar_gene", "multi_gene", "analysis_mode",
+    "immune_method", "data_dir", "debug", "storage", "process",
+    "p_threshold", "strict_filter", "log2fc_threshold",
+    "enrichment_source_mode", "enrichment_gene_sets",
+    "control_label", "exp_label", "exp_type", "group_select_col",
+    "group_memory_enabled", "group_memory_use",
+    "plot_data_warning", "overwrite_figures", "organism",
+]
+
+
+def _print_config_and_exit() -> None:
+    """config 子命令入口"""
+    config_path = os.path.join(CONFIG_DIR, "config.yaml")
+    if not os.path.exists(config_path):
+        print("未找到 conf/config.yaml")
+        sys.exit(1)
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    args = sys.argv[2:]
+
+    if "--all" in args:
+        print(yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False))
+        sys.exit(0)
+
+    if args:
+        key = args[0]
+        val = _get_nested(cfg, key)
+        if val is None:
+            print(f'配置键 "{key}" 不存在')
+            sys.exit(1)
+        print(_format_val(val))
+        sys.exit(0)
+
+    # 默认：核心配置摘要
+    width = 72
+    print("=" * width)
+    print("SGA — 当前核心配置")
+    print("=" * width)
+    for k in _CORE_KEYS:
+        val = _get_nested(cfg, k)
+        if val is None:
+            continue
+        label = f"  {k}"
+        print(f"{label:36s} = {_format_val(val)}")
+    print("=" * width)
+    print("更多用法: python main.py config <key>    查询单个配置项")
+    print("         python main.py config --all      查看全部配置")
+    print("=" * width)
+    sys.exit(0)
+
+
 # 如果命令为查看版本信息则直接输出
 if len(sys.argv) > 1 and sys.argv[1] in {"version", "--version", "-v"}:
     _print_cfg_version_and_exit()
@@ -99,6 +171,10 @@ if len(sys.argv) > 1 and sys.argv[1] in {"version", "--version", "-v"}:
 # 如果命令为查看帮助则直接输出
 if len(sys.argv) > 1 and sys.argv[1] in {"help", "--help", "-h"}:
     _print_custom_help_and_exit()
+
+# 如果命令为查看配置则直接输出
+if len(sys.argv) > 1 and sys.argv[1] == "config":
+    _print_config_and_exit()
 
 # 检查配置文件是否存在（应由 setup.sh 生成）
 _config_path = os.path.join(CONFIG_DIR, "config.yaml")
