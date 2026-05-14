@@ -183,6 +183,26 @@ if not os.path.exists(_config_path):
     sys.exit(1)
 
 
+def _resolve_config(cfg: Config) -> None:
+    """Hydra 会覆盖 __post_init__ 的修改，因此将自动推导逻辑放在此处。"""
+    # multi_gene 优先：自动清 tar_gene
+    if cfg.multi_gene and cfg.tar_gene:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"tar_gene ({cfg.tar_gene!r}) 和 multi_gene 同时存在，"
+            f"multi_gene 优先，已自动清空 tar_gene。"
+        )
+        cfg.tar_gene = ""
+
+    # multi_gene 自动推导 gse_id
+    if cfg.multi_gene:
+        if os.path.isfile(cfg.multi_gene):
+            stem = os.path.splitext(os.path.basename(cfg.multi_gene))[0]
+        else:
+            stem = "multi_gene_analysis"
+        cfg.gse_id = stem
+
+
 def _init(cfg: Config) -> tuple:
     """初始化日志、数据处理器"""
     logging.getLogger().setLevel(logging.INFO)
@@ -204,6 +224,8 @@ def main(cfg: Config):
     # 相对路径基于项目根目录解析（Hydra 用 YAML 值覆盖了 __post_init__ 的解析结果）
     if not os.path.isabs(cfg.data_dir):
         cfg.data_dir = os.path.abspath(os.path.join(BASE_DIR, cfg.data_dir))
+
+    _resolve_config(cfg)
 
     data, logger = _init(cfg)
 
@@ -333,6 +355,7 @@ def main(cfg: Config):
                 continue
             cfg.gse_id = new_gse
             cfg.tar_gene = new_gene
+            cfg.multi_gene = ""
             data = DataHandler()
             logger.info(f"已切换至 GSE: {new_gse}, 目标基因: {new_gene}")
             continue

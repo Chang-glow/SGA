@@ -10,7 +10,7 @@ usage: |
   示例:
     python main.py gse_id=GSE123456 analysis_mode=diff
     python main.py analysis_mode=hilo tar_gene=APEX1 strict_filter=false
-    python main.py analysis_mode=enrich enrichment_source_mode=diff
+    python main.py analysis_mode=enrich multi_gene=\"TP53,EGFR,KRAS\"
 
 sections:
   # ── 必需参数 ─────────────────────────────────────────────
@@ -28,10 +28,12 @@ sections:
         default: '"" （与 multi_gene 二选一）'
         desc: |
           多基因输入。支持两种格式：
-          1) 逗号分隔：multi_gene="APEX1,TP53,TGFB1"
-          2) 文件路径：multi_gene="./my_genes.txt"（每行一个基因，# 开头为注释）
+          1) 分隔符分隔（命令行用 _，YAML内可用 , ; + _）：
+             multi_gene=APEX1_TP53_TGFB1
+          2) 文件路径：multi_gene=./my_genes.txt（每行一个基因，# 开头为注释）
           与 tar_gene 互斥，只能保留其中一个。
-          目前 immune 模式生成 N×22 免疫热图，diff/hilo 模式生成每基因一张箱线图。
+          immune 模式：生成 N×22 免疫热图；diff/hilo 模式：生成每基因一张箱线图；
+          enrich 模式：直接作为富集分析输入基因列表（无需先运行 diff/hilo）。
 
       - key: gse_id
         type: string
@@ -49,7 +51,7 @@ sections:
           corr   — 相关性分析：目标基因与其他基因的 Pearson 相关
           diff   — 差异分析：Control vs Experiment 组间 Welch's t-test + FDR 校正
           hilo   — 高低表达分析：按目标基因中位表达分成 High/Low 组后差异比较
-          enrich — 富集分析：对 diff/hilo 结果做 KEGG/GO 通路富集（需要先运行 diff/hilo）
+          enrich — 富集分析：对 diff/hilo 结果做 KEGG/GO 通路富集，也支持 multi_gene 直接输入基因列表
           immune — 免疫浸润分析：用去卷积算法（TumorDecon）估算 22 种免疫细胞丰度
           wgcna  — WGCNA数据准备：筛选高变异基因（~3000），输出 datExpr.csv 和 datTraits.csv 供R语言WGCNA包分析
 

@@ -8,14 +8,35 @@
 
 ## 输入数据
 
-富集分析**不依赖表达矩阵**（阶段 1 跳过），直接从磁盘读取已有的 diff 或 hilo 结果：
+富集分析有两种输入方式：
+
+### 方式一：multi_gene 直接输入（推荐，无需表达数据）
+
+直接在配置中设置 `multi_gene`，富集分析将跳过 diff/hilo 源文件，直接使用指定基因列表调用 Enrichr：
+
+```yaml
+analysis_mode: enrich
+multi_gene: TP53,EGFR,KRAS,BRAF,PIK3CA   # YAML内用逗号；命令行用 _
+# 或从文件读取（每行一个基因，# 开头为注释）
+# multi_gene: "./my_genes.txt"
+```
+
+基因列表会自动去重，若超过 `max_input_genes`（默认 500）则截断。
+
+> `multi_gene` 与 `tar_gene` 互斥。`tar_gene` 仅支持单个基因，对富集分析意义不大，建议使用 `multi_gene`。
+
+### 方式二：从 diff/hilo 结果读取
+
+设置 `enrichment_source_mode` 为 `"diff"` 或 `"hilo"`，从已有的分析结果中读取基因：
 
 - PKL 路径（优先）：`data/{GSE_ID}/pkl/{GSE_ID}_differential_summary.pkl`
 - CSV 路径（回退）：`res/csv/{GSE_ID}_differential_summary.csv`
 
 来源由 `enrichment_source_mode` 控制（`"diff"` 或 `"hilo"`）。
 
-### 基因筛选流程
+### 基因筛选流程（仅 source 模式）
+
+以下流程仅在从 diff/hilo 结果读取时适用（`multi_gene` 直接输入时跳过，仅做去重和截断）：
 
 1. 清洗无效基因名（NaN、空字符串、纯数字 Entrez ID、探针 ID）
 2. 按 `padj < p_threshold` 筛选（若 `log2fc_threshold > 0` 则额外要求 `|log2FC| >= log2fc_threshold`）
@@ -103,7 +124,9 @@ gseapy.enrichr(
 
 ### Q: 运行富集分析需要先做什么？
 
-需要先在同 GSE_ID 下运行一次 `diff` 或 `hilo` 分析（生成 `differential_summary.pkl` 或 `highlow_summary.pkl`）。否则会报 `FileNotFoundError`。
+**若使用 `multi_gene` 直接输入**：无需任何前置分析，直接配置 `multi_gene` + `analysis_mode: enrich` 即可运行。
+
+**若从 diff/hilo 结果读取**：需要先在同 GSE_ID 下运行一次 `diff` 或 `hilo` 分析（生成 `differential_summary.pkl` 或 `highlow_summary.pkl`）。否则会报 `FileNotFoundError`。
 
 可通过 `SGA config enrichment_source_mode` 查看当前配置的输入来源。
 

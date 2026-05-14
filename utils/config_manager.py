@@ -1,4 +1,5 @@
 import os
+import re
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict
@@ -57,11 +58,12 @@ class Config:
     wgcna_top_n_genes: int = 3000    # WGCNA 筛选基因数
 
     def __post_init__(self):
-        # 互斥检查
+        # 互斥检查：multi_gene 优先，自动清 tar_gene
         has_tar = bool(self.tar_gene)
         has_multi = bool(self.multi_gene)
         if has_tar and has_multi:
-            raise ValueError("tar_gene 和 multi_gene 不能同时存在，请只保留一个")
+            object.__setattr__(self, "tar_gene", "")
+            has_tar = False
         if not has_tar and not has_multi:
             raise ValueError("tar_gene 和 multi_gene 必须存在一个")
 
@@ -72,7 +74,7 @@ def parse_tar_genes(tar_gene: str, multi_gene: str) -> List[str]:
         if os.path.isfile(multi_gene):
             with open(multi_gene) as f:
                 return [l.strip() for l in f if l.strip() and not l.startswith("#")]
-        return [g.strip() for g in multi_gene.split(",") if g.strip()]
+        return [g.strip() for g in re.split(r"[,;+_]", multi_gene) if g.strip()]
     return [tar_gene.strip()] if tar_gene else []
 
 

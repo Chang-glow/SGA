@@ -253,6 +253,12 @@ class FigurePlotter(ABC):
         fig_name = self._build_fig_name(f"{matrix_info}_{gene_info}_corr_scatter.png")
         self._save_plot(fig_name)
 
+    def _gene_token(self) -> str:
+        """返回用于标题/文件名的基因标识。
+        多基因时返回 "N genes"，单基因时返回基因名。"""
+        genes = parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
+        return genes[0] if len(genes) == 1 else f"{len(genes)} genes"
+
     def _build_fig_name(self, suffix: str, gene: str = None) -> str:
         """构建包含分析模式的结果文件名。
         gene: 指定时用该基因名；不指定且多基因时用 multi_{N}genes"""
@@ -1156,7 +1162,7 @@ class FigurePlotter(ABC):
                 ax.set_yticks(range(len(df)))
                 ax.set_yticklabels(df["Term"].values, fontsize=9)
                 ax.set_xlabel(xlabel, fontsize=11)
-                ax.set_title(f"{self.cfg.tar_gene} — {gs}", fontsize=12, fontweight="bold")
+                ax.set_title(f"{self._gene_token()} — {gs}", fontsize=12, fontweight="bold")
                 ax.invert_yaxis()
 
                 if self.cfg.p_threshold < 1:
@@ -1226,7 +1232,7 @@ class FigurePlotter(ABC):
 
                 xlabel = "Combined Score" if "Combined Score" in gs_df.columns and gs_df["Combined Score"].nunique() > 1 else "-log10(Adjusted P-value)"
                 ax.set_xlabel(xlabel, fontsize=11)
-                ax.set_title(f"{self.cfg.tar_gene} — {gs}", fontsize=12, fontweight="bold")
+                ax.set_title(f"{self._gene_token()} — {gs}", fontsize=12, fontweight="bold")
 
                 if self.cfg.p_threshold < 1 and "Adjusted" in xlabel:
                     ref = -np.log10(self.cfg.p_threshold)
@@ -1341,7 +1347,7 @@ class FigurePlotter(ABC):
         cbar.ax.set_title('Score', fontsize=9)
 
         fig.suptitle(
-            f"{self.cfg.tar_gene} — GO Enrichment Combined",
+            f"{self._gene_token()} — GO Enrichment Combined",
             fontsize=14, fontweight="bold", y=1.01,
         )
         fig.subplots_adjust(left=0.60, right=0.90, top=0.93, bottom=0.05)
@@ -1373,7 +1379,7 @@ class FigurePlotter(ABC):
         plot_df = pd.concat(frames, ignore_index=True)
         csv_dir = os.path.join(RESULT_DIR, "csv")
         os.makedirs(csv_dir, exist_ok=True)
-        fname = f"{self.cfg.gse_id}_{self.cfg.tar_gene}_enrich_plotting_data.csv"
+        fname = f"{self.cfg.gse_id}_{self._gene_token()}_enrich_plotting_data.csv"
         out_path = self._resolve_save_path(os.path.join(csv_dir, fname))
         plot_df.to_csv(out_path, index=False)
         self._logger.info(f"画图数据已保存至 {out_path}")

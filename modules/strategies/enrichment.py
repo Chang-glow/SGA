@@ -8,6 +8,7 @@ import pandas as pd
 import gseapy
 
 from utils.paths import RESULT_DIR
+from utils.config_manager import parse_tar_genes
 
 
 _PROBE_PREFIXES = (
@@ -34,25 +35,32 @@ class EnrichStrategy:
         self._logger = analyzer._logger
 
     def calculate(self) -> Optional[pd.DataFrame]:
-        source_mode = getattr(self.cfg, "enrichment_source_mode", "diff")
-        data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
-        source_mapping = {"diff": "differential", "hilo": "highlow"}
-        source_key = source_mapping.get(source_mode, "differential")
+        if self.cfg.multi_gene:
+            gene_list = self._genes_from_multi_gene()
+            if len(gene_list) == 0:
+                self._logger.warning("multi_gene 未提供有效基因。")
+                return None
+            self._logger.info(f"multi_gene 直接输入 {len(gene_list)} 个基因，跳过源文件读取与筛选。")
+        else:
+            source_mode = getattr(self.cfg, "enrichment_source_mode", "diff")
+            data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
+            source_mapping = {"diff": "differential", "hilo": "highlow"}
+            source_key = source_mapping.get(source_mode, "differential")
 
-        csv_path = os.path.join(RESULT_DIR, "csv", f"{self.cfg.gse_id}_{source_key}_summary.csv")
-        pkl_path = os.path.join(data_dir, "pkl", f"{self.cfg.gse_id}_{source_key}_summary.pkl")
+            csv_path = os.path.join(RESULT_DIR, "csv", f"{self.cfg.gse_id}_{source_key}_summary.csv")
+            pkl_path = os.path.join(data_dir, "pkl", f"{self.cfg.gse_id}_{source_key}_summary.pkl")
 
-        source_df = self._read_source_results(csv_path, pkl_path)
-        if source_df is None or source_df.empty:
-            raise FileNotFoundError(
-                f"未找到 {source_mode} 分析结果。请先运行 diff 或 hilo 分析。"
-            )
+            source_df = self._read_source_results(csv_path, pkl_path)
+            if source_df is None or source_df.empty:
+                raise FileNotFoundError(
+                    f"未找到 {source_mode} 分析结果。请先运行 diff 或 hilo 分析。"
+                )
 
-        gene_list = self._filter_significant_genes(source_df)
-        if len(gene_list) == 0:
-            self._logger.warning("没有基因通过筛选阈值。")
-            return None
-        self._logger.info(f"{len(gene_list)} 个显著基因入选富集分析。")
+            gene_list = self._filter_significant_genes(source_df)
+            if len(gene_list) == 0:
+                self._logger.warning("没有基因通过筛选阈值。")
+                return None
+            self._logger.info(f"{len(gene_list)} 个显著基因入选富集分析。")
 
         gene_sets = getattr(self.cfg, "enrichment_gene_sets", ["KEGG_2016"])
         organism = getattr(self.cfg, "organism", "human")
@@ -180,6 +188,24 @@ class EnrichStrategy:
         overlap = len(g_i & g_j)
         smaller = min(len(g_i), len(g_j))
         return smaller > 0 and overlap / smaller >= threshold
+
+    def _genes_from_multi_gene(self) -> List[str]:
+        """从 multi_gene 配置解析基因列表，去重并截断到 max_input_genes。"""
+        genes = parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
+        seen = set()
+        uniq = []
+        for g in genes:
+            if g not in seen:
+                seen.add(g)
+                uniq.append(g)
+        max_genes = getattr(self.cfg, "max_input_genes", 500)
+        if len(uniq) > max_genes:
+            self._logger.warning(
+                f"multi_gene 基因数 ({len(uniq)}) 超过 max_input_genes ({max_genes})，"
+                f"截断至前 {max_genes} 个。"
+            )
+            uniq = uniq[:max_genes]
+        return uniq
 
     def _read_source_results(self, csv_path: str, pkl_path: str) -> Optional[pd.DataFrame]:
         if os.path.exists(pkl_path):
