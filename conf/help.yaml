@@ -1,16 +1,16 @@
 # SGA 自定义帮助文件 — 所有可配置项说明
-# 通过 python main.py help 查看
+# 通过 sga help 查看
 
 usage: |
   用法:
-    python main.py                             使用 conf/config.yaml 中的配置运行
-    python main.py <key>=<value> ...           覆盖配置项（Hydra 语法）
-    python main.py help                        显示此帮助信息
+    sga                                         使用 conf/config.yaml 中的配置运行
+    sga <key>=<value> ...                       覆盖配置项（Hydra 语法）
+    sga help                                    显示此帮助信息
 
   示例:
-    python main.py gse_id=GSE123456 analysis_mode=diff
-    python main.py analysis_mode=hilo tar_gene=APEX1 strict_filter=false
-    python main.py analysis_mode=enrich multi_gene=\"TP53,EGFR,KRAS\"
+    sga gse_id=GSE123456 analysis_mode=diff
+    sga analysis_mode=hilo tar_gene=APEX1 strict_filter=false
+    sga analysis_mode=enrich multi_gene=TP53_EGFR_KRAS
 
 sections:
   # ── 必需参数 ─────────────────────────────────────────────

@@ -1,6 +1,6 @@
-# **SGA: Simple GEO Analyzer (v0.3.3)**
+# **SGA: Simple GEO Analyzer** ![version](https://img.shields.io/github/v/tag/Chang-glow/SGA)
 
-**SGA** 是一个为生信初学者日常科研设计的轻量级、自动化 GEO 数据处理工具。它将 GEO 数据下载、清洗、分析与可视化流程集成在一起，可以快速从 GEO 原始数据得到差异分析或相关性结果。
+**sga** 是一个为生信初学者日常科研设计的轻量级、自动化 GEO 数据处理工具。它将 GEO 数据下载、清洗、分析与可视化流程集成在一起，可以快速从 GEO 原始数据得到差异分析或相关性结果。
 
 ---
 
@@ -13,7 +13,7 @@
 - **免疫浸润**：四种去卷积算法（DeconRNASeq、CIBERSORT、ssGSEA、SingScore），纯 Python 无 R 依赖
 - **智能分组 + 分组记忆**
 - **Hydra 配置驱动**，命令行覆盖
-- **config 子命令**：快速查看/查询当前配置
+- **bash 预解析**：`version` / `help` / `config` 子命令秒出结果（零 Python 启动开销）
 
 ---
 
@@ -25,7 +25,7 @@ SGA/
 ├── conf/                         # Hydra 配置文件存放目录
 │   ├── config.yaml.template      # 配置模板文件
 │   ├── config.yaml               # 实际运行配置（由 setup.sh 生成）
-│   └── help.yml                  # 自定义帮助信息
+│   └── help.yaml                 # 自定义帮助信息
 ├── doc/                          # 文档
 ├── modules/                      # 核心功能模块
 │   ├── __init__.py
@@ -67,40 +67,47 @@ git clone https://github.com/YourUsername/SGA.git
 cd SGA
 bash setup.sh && source ~/.bashrc   # 创建环境 + 生成配置 + 注册命令
 # 编辑 conf/config.yaml 设置 tar_gene、gse_id 等参数
-SGA help                            # 查看所有配置项参考
+sga help                            # 查看所有配置项参考
 ```
 
 ```bash
 # 或者手动安装（所有平台）
 conda env create -f environment.yml            # 通过文件创建环境
 conda activate sga                             # 启动环境
-# 可选pip install -r requirements.txt代替conda步骤，不推荐
 cp conf/config.yaml.template conf/config.yaml  # 手动生成配置
-python main.py help                            # 查看所有配置项参考(该安装方式下无SGA命令)
+python main.py                                 # 直接运行（该安装方式下无 sga 命令）
 ```
 
 ### 查看当前配置
 
 ```bash
-python main.py config               # 核心配置摘要
-python main.py config --all         # 全部配置
-python main.py config immune_method # 查询单个配置项
+sga config               # 核心配置摘要（含版本号）
+sga config --all         # 全部配置
+sga config immune_method # 查询单个配置项
+sga version              # 查看版本号（来自 git tag）
 ```
 
 ### 运行分析
 
 ```bash
-SGA tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune
+sga tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune
 ```
 
 命令行覆盖参数：
 
 ```bash
-SGA tar_gene=Acta2 gse_id=GSE123456 analysis_mode=diff
-SGA tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune immune_method=ssGSEA
+sga tar_gene=Acta2 gse_id=GSE123456 analysis_mode=diff
+sga tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune immune_method=ssGSEA
 ```
 
-执行 `SGA help` 查看所有配置项的完整参考。
+**多基因输入**（enrich 模式可直接输入基因列表，无需表达数据）：
+
+```bash
+sga analysis_mode=enrich multi_gene=TP53_EGFR_KRAS
+sga analysis_mode=enrich multi_gene=./my_genes.txt
+```
+
+执行 `sga help` 查看所有配置项的完整参考。
 
 ---
 
@@ -119,6 +126,7 @@ SGA tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune immune_method=ssGSEA
 - 表达矩阵若未 log 转换，程序会自动执行 `log2(x + 1)`。
 - 免疫浸润分析等需要原始数据的策略不会进行自动 log 转换。
 - 免疫浸润使用 ssGSEA 或 SingScore 时，堆叠柱状图会提示数据非比例（可通过 `plot_data_warning: false` 关闭提示）。详见 `doc/immune_infiltration.md`。
+- `tar_gene` 与 `multi_gene` 互斥，同时设置时 `multi_gene` 优先。`multi_gene` 在 CLI 中使用 `_` 分隔基因名，YAML 内支持 `,` `;` `+` `_`。
 
 ---
 
@@ -130,4 +138,4 @@ SGA tar_gene=APEX1 gse_id=GSE143318 analysis_mode=immune immune_method=ssGSEA
 
 ### **注：本项目由 Claude code 参与辅助开发**
 
-*📅 Update at: 2026-05-12*
+*📅 Update at: 2026-05-14*

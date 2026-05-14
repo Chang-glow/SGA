@@ -1,0 +1,226 @@
+========================================================================
+SGA (Simple GEO Analyzer) — 配置项参考
+========================================================================
+
+用法:
+  sga                                         使用 conf/config.yaml 中的配置运行
+  sga <key>=<value> ...                       覆盖配置项（Hydra 语法）
+  sga help                                    显示此帮助信息
+
+示例:
+  sga gse_id=GSE123456 analysis_mode=diff
+  sga analysis_mode=hilo tar_gene=APEX1 strict_filter=false
+  sga analysis_mode=enrich multi_gene=TP53_EGFR_KRAS
+
+[必需参数]
+------------------------------------------------
+  tar_gene
+    类型: string
+    默认: （与 multi_gene 二选一）
+    目标基因符号（大写），如 APEX1、TP53、TGFB1。
+    与 multi_gene 互斥，只能保留其中一个。
+
+  multi_gene
+    类型: string
+    默认: "" （与 multi_gene 二选一）
+    多基因输入。支持两种格式：
+    1) 分隔符分隔（命令行用 _，YAML内可用 , ; + _）：
+    multi_gene=APEX1_TP53_TGFB1
+    2) 文件路径：multi_gene=./my_genes.txt（每行一个基因，# 开头为注释）
+    与 tar_gene 互斥，只能保留其中一个。
+    immune 模式：生成 N×22 免疫热图；diff/hilo 模式：生成每基因一张箱线图；
+    enrich 模式：直接作为富集分析输入基因列表（无需先运行 diff/hilo）。
+
+  gse_id
+    类型: string
+    默认: （无默认值，必填）
+    GEO 数据集 accession，如 GSE143318、GSE55747
+
+[核心设置]
+------------------------------------------------
+  analysis_mode
+    类型: string
+    默认: diff
+    可选: corr, diff, hilo, enrich, immune, wgcna
+    corr   — 相关性分析：目标基因与其他基因的 Pearson 相关
+    diff   — 差异分析：Control vs Experiment 组间 Welch's t-test + FDR 校正
+    hilo   — 高低表达分析：按目标基因中位表达分成 High/Low 组后差异比较
+    enrich — 富集分析：对 diff/hilo 结果做 KEGG/GO 通路富集，也支持 multi_gene 直接输入基因列表
+    immune — 免疫浸润分析：用去卷积算法（TumorDecon）估算 22 种免疫细胞丰度
+    wgcna  — WGCNA数据准备：筛选高变异基因（~3000），输出 datExpr.csv 和 datTraits.csv 供R语言WGCNA包分析
+
+  version
+    类型: string
+    默认: 0.3.3
+    SGA 版本号
+
+[分组设置（仅 diff 模式使用）]
+------------------------------------------------
+  group_select_col
+    类型: string (或 null)
+    默认: source_name_ch1
+    GEO 元数据中用于分组的列名。设为 null 直接进入交互式分组。
+    常见列名：source_name_ch1（来源描述）、characteristics_ch1（样本特征）、title（标题）
+
+  control_label
+    类型: 字符串列表
+    默认: ['control']
+    在 group_select_col 列中识别 Control 组的关键词（不区分大小写，子串匹配）
+
+  exp_label
+    类型: 字符串列表
+    默认: ['CCl4']
+    在 group_select_col 列中识别实验组的关键词（不区分大小写，子串匹配）
+
+  exp_type
+    类型: string
+    默认: Fibrosis
+    实验组的显示名称，如 Fibrosis、Tumor、Treatment。用于结果标签和图表标题
+
+[分组记忆]
+------------------------------------------------
+  group_memory_enabled
+    类型: boolean
+    默认: False
+    是否在交互式分组完成后保存选择到 conf/group_memory.yaml
+
+  group_memory_use
+    类型: boolean
+    默认: False
+    是否从 conf/group_memory.yaml 读取并自动应用之前保存的分组（跳过交互式提示）
+    注意: 若记忆的列名/分组值在当前元数据中不存在，会自动回退到交互式选择
+
+[统计过滤]
+------------------------------------------------
+  p_threshold
+    类型: float
+    默认: 0.05
+    显著性阈值（用于 padj 或 P_value 过滤，取决于 strict_filter）
+
+  strict_filter
+    类型: boolean
+    默认: True
+    true  — 严格模式：按 padj（FDR 校正后）< p_threshold 过滤
+    false — 宽松模式：按 P_value（未校正）< p_threshold
+    且 |log2FC| > log2fc_threshold 过滤
+
+  log2fc_threshold
+    类型: float
+    默认: 0.5
+    最小绝对 log2 倍数变化。用于：
+    - strict_filter=false 时的过滤条件之一
+    - 富集分析输入基因的筛选
+
+  max_output_genes
+    类型: integer
+    默认: 0
+    diff/hilo 结果保留的最大基因数（按显著程度排序）。0 = 不限制
+
+  signs
+    类型: 字符串列表
+    默认: ['positive', 'negative']
+    corr 模式：保留哪些符号的相关性（positive=正相关, negative=负相关）
+
+[基因过滤]
+------------------------------------------------
+  gene_blacklist
+    类型: 字符串列表
+    默认: []
+    从结果中排除的基因名称列表（不区分大小写，精确匹配）。如无法被正则模式覆盖的 lncRNA 等
+
+[富集分析（仅 enrich 模式使用）]
+------------------------------------------------
+  enrichment_source_mode
+    类型: string
+    默认: diff
+    可选: diff, hilo
+    富集分析的输入来源：diff = 差异分析结果，hilo = 高低表达分析结果
+
+  enrichment_gene_sets
+    类型: 字符串列表
+    默认: ['KEGG_2026', 'GO_Biological_Process_2025', 'GO_Molecular_Function_2025', 'GO_Cellular_Component_2025']
+    Enrichr 基因集库列表。可通过 python -c "import gseapy; print(gseapy.get_library_name())" 查看所有可用库
+
+  organism
+    类型: string
+    默认: human
+    物种名称，用于 Enrichr API 查询。常用值：human、mouse、rat
+
+  max_input_genes
+    类型: integer
+    默认: 500
+    提交给 Enrichr 的最大基因数。Enrichr API 有输入大小限制，过大会超时
+
+[免疫浸润分析（仅 immune 模式使用）]
+------------------------------------------------
+  immune_method
+    类型: string
+    默认: DeconRNASeq
+    可选: DeconRNASeq, CIBERSORT, ssGSEA, SingScore
+    去卷积算法。DeconRNASeq（最小二乘，速度快，默认推荐）。
+    CIBERSORT 使用 NuSVR，每个样本需 10-30 秒但精度更高。
+
+[WGCNA数据准备（仅 wgcna 模式使用）]
+------------------------------------------------
+  （无额外配置项）
+    类型: （无额外配置项）
+    默认: （无额外配置项）
+    wgcna 模式自动执行以下步骤：
+    1) 提取未经 log2 转换的原始标准化表达矩阵
+    2) 筛选方差最大的约 3000 个基因（若存在 diff/hilo 缓存则优先按 padj 筛选）
+    3) 输出 res/csv/{gse_id}_{tar_gene}_datExpr.csv —— 样本×基因表达矩阵
+    4) 输出 res/csv/{gse_id}_{tar_gene}_datTraits.csv —— 样本×性状矩阵（Group + {tar_gene}_exp）
+    5) 该模式不绘制图表，CSV 文件供 R 语言 WGCNA 包下游分析
+
+[流程控制与输出]
+------------------------------------------------
+  process
+    类型: string
+    默认: 123
+    流程阶段控制（数字组合）：
+    1 = 数据下载与清洗
+    2 = 分析计算
+    3 = 绘图输出
+    如只画图：process=3；完整流程：process=123（默认）
+
+  overwrite_figures
+    类型: boolean
+    默认: False
+    false — 不覆盖已有图片，自动迭代编号（如 boxplot (1).png）
+    true  — 直接覆盖已有图片
+
+[调试与存储]
+------------------------------------------------
+  data_dir
+    类型: string
+    默认: data
+    数据存储根目录（相对于项目根目录）
+
+  storage
+    类型: boolean
+    默认: True
+    是否将分析结果保存为 pkl + csv 文件
+
+  debug
+    类型: boolean
+    默认: False
+    true  — 调试模式：跳过缓存，强制重新下载数据和重新计算
+    false — 正常模式：若缓存文件存在则直接读取
+
+  strict_mode
+    类型: boolean
+    默认: False
+    是否将表达矩阵对齐到仅共享样本（更严格的矩阵匹配）
+
+  log_threshold
+    类型: integer
+    默认: 10
+    判断数据是否已经 log2 转换的阈值。表达矩阵最大值 ≤ 该值时视为已转换，跳过 log2(x+1)
+
+[Hydra 日志]
+------------------------------------------------
+  hydra.job_logging.handlers.console.level
+    类型: string
+    默认: INFO
+    可选: DEBUG, INFO, WARNING, ERROR
+    控制台日志级别
