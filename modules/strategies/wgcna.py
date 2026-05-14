@@ -1,6 +1,11 @@
 import os
 import numpy as np
 import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
+import seaborn as sns
+from scipy import stats as sp_stats
 
 from modules.calculater import fetch_gene_vector, prepare_expr_matrix
 from utils import RESULT_DIR, FIGURE_DIR
@@ -103,8 +108,6 @@ class WgcnaStrategy:
         self._logger.info(f"检测到 {len(modules)} 个模块: {modules}")
 
         # 设置 metadata 颜色映射（plotModuleEigenGene 依赖此字典）
-        from matplotlib.cm import ScalarMappable
-        import matplotlib as mpl
         for col in datTraits.columns:
             unique_vals = datTraits[col].dropna().unique()
             if len(unique_vals) <= 10:
@@ -135,11 +138,10 @@ class WgcnaStrategy:
 
         def _patched_scatter(self, outer_ring: bool = False):
             from gseapy.plot import UnitData
-            import matplotlib.pyplot as _plt
 
             df = self.data.assign(
                 area=self.data["Hits_ratio"]
-                * (self.scale * _plt.rcParams["lines.markersize"]) ** 2
+                * (self.scale * plt.rcParams["lines.markersize"]) ** 2
             )
             colmap = df[self.colname].astype(int)
             vmin = np.percentile(colmap.min(), 2)
@@ -175,7 +177,7 @@ class WgcnaStrategy:
             handles, labels = sc.legend_elements(
                 prop="sizes", num=3, color="gray",
                 func=lambda s: 100 * s
-                / (_plt.rcParams["lines.markersize"] * self.scale) ** 2,
+                / (plt.rcParams["lines.markersize"] * self.scale) ** 2,
             )
             ax.legend(
                 handles, labels,
@@ -322,10 +324,6 @@ class WgcnaStrategy:
 
     def _module_trait_heatmap_with_stars(self, wgcna, metaData, file_name):
         """模块-性状关系热图，带显著性星号标注（p<0.05=* p<0.01=** p<0.001=***）"""
-        import seaborn as sns
-        import matplotlib.pyplot as plt
-        from scipy import stats as sp_stats
-
         datTraits_inner = wgcna.getDatTraits(metaData)
 
         moduleTraitCor = pd.DataFrame(index=wgcna.MEs.columns,

@@ -5,10 +5,11 @@ from typing import Optional, List
 import numpy as np
 import pandas as pd
 
-import gseapy
+from modules.strategies import NO_GEO_MODES
 
-from utils.paths import RESULT_DIR
-from utils.config_manager import parse_tar_genes
+from utils import RESULT_DIR, parse_tar_genes
+
+NO_GEO_MODES.add("enrich")
 
 
 _PROBE_PREFIXES = (
@@ -65,6 +66,8 @@ class EnrichStrategy:
         gene_sets = getattr(self.cfg, "enrichment_gene_sets", ["KEGG_2016"])
         organism = getattr(self.cfg, "organism", "human")
         all_results = []
+
+        import gseapy  # 懒加载：仅富集分析时需要，减少模块导入时的启动耗时
 
         for gs in gene_sets:
             self._logger.info(f"正在对基因集 {gs} 进行富集分析...")

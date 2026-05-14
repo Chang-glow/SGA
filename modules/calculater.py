@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 from utils import loggers, Config, DataHandler, RESULT_DIR, resolve_save_path, df_content_hash
+from modules.data_packer import DataPacker
 
 
 _PROBE_RE = re.compile(
@@ -191,7 +192,6 @@ class Analyzer(ABC):
         """根据cfg检查数据传入方式,创建分析对象"""
         data_dir = os.path.join(cfg.data_dir, cfg.gse_id)
 
-        from modules.data_packer import DataPacker
         pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
 
         if cfg.analysis_mode == "enrich":
@@ -637,7 +637,6 @@ class FileAnalyzer(Analyzer):
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         data_dir = os.path.join(self.cfg.data_dir, self.cfg.gse_id)
-        from modules.data_packer import DataPacker
         self.data_path = DataPacker.resolve_pack_path(data_dir, self.cfg.gse_id, self.cfg.analysis_mode)
         self._logger.info("将从打包的pkl中读取数据")
 

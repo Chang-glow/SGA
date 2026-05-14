@@ -1,4 +1,3 @@
-import TumorDecon as td
 import pandas as pd
 
 from modules.calculater import prepare_expr_matrix
@@ -52,6 +51,8 @@ class ImmuneStrategy:
         sig_matrix = None
         up_genes = None
         down_genes = None
+
+        import TumorDecon as td  # 懒加载：仅免疫浸润分析时需要，减少模块导入时的启动耗时
 
         if method_lower in ("cibersort", "deconrnaseq"):
             self._logger.info("加载 LM22 签名矩阵...")

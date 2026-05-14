@@ -8,10 +8,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from utils.paths import FIGURE_DIR, RESULT_DIR
+from utils import Config, DataHandler, loggers, safe_filepath, FIGURE_DIR, RESULT_DIR, parse_tar_genes
 from modules.calculater import fetch_gene_vector
-from utils import Config, DataHandler, loggers, safe_filepath
-from utils.config_manager import parse_tar_genes
+from modules.data_packer import DataPacker
 
 
 class FigurePlotter(ABC):
@@ -36,7 +35,6 @@ class FigurePlotter(ABC):
     def create(cls, cfg: Config, data: DataHandler):
         """根据cfg检查使用哪个子类"""
         data_dir = os.path.join(cfg.data_dir, cfg.gse_id)
-        from modules.data_packer import DataPacker
         data_pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
         gene_corr_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_correlation_summary.pkl")
         gene_diff_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_differential_summary.pkl")
@@ -1471,7 +1469,6 @@ class FilePlotter(FigurePlotter):
             raise ValueError(f"未知分析模式：{self.cfg.analysis_mode}")
 
         summary_path = os.path.join(data_dir, "pkl", summary_name)
-        from modules.data_packer import DataPacker
         data_pack_path = DataPacker.resolve_pack_path(data_dir, gse_id, self.cfg.analysis_mode)
 
         if self.cfg.analysis_mode == "corr":

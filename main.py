@@ -4,11 +4,10 @@ import hydra
 import logging
 import time
 
-from modules import DataLoader, Analyzer, FigurePlotter
-from modules.data_packer import DataPacker
+from modules import DataLoader, Analyzer, FigurePlotter, DataPacker
+from modules.strategies import NO_GEO_MODES
 
-from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR, parse_user_input
-from utils.paths import BASE_DIR
+from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR, parse_user_input, BASE_DIR
 
 
 def _resolve_config(cfg: Config) -> None:
@@ -22,8 +21,7 @@ def _resolve_config(cfg: Config) -> None:
         )
         cfg.tar_gene = ""
 
-    # multi_gene 自动推导 gse_id
-    if cfg.multi_gene:
+    if cfg.multi_gene and cfg.analysis_mode in NO_GEO_MODES:
         if os.path.isfile(cfg.multi_gene):
             stem = os.path.splitext(os.path.basename(cfg.multi_gene))[0]
         else:
@@ -62,7 +60,7 @@ def main(cfg: Config):
 
         # 阶段1: 数据获取与清洗
         if "1" in str(cfg.process):
-            if cfg.analysis_mode != "enrich" and data.meta_matrix_pack is None:
+            if not (cfg.multi_gene and cfg.analysis_mode in NO_GEO_MODES) and data.meta_matrix_pack is None:
                 data_pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
 
                 if os.path.exists(data_pack_path) and not cfg.debug:
@@ -74,8 +72,8 @@ def main(cfg: Config):
                     packer = DataPacker(cfg, loader.gse, downloaded_data)
                     data.meta_matrix_pack = packer.build_pack()
                     logger.info("数据获取完成")
-            elif cfg.analysis_mode == "enrich":
-                logger.info("富集分析模式：跳过数据下载与清洗阶段。")
+            elif cfg.multi_gene and cfg.analysis_mode in NO_GEO_MODES:
+                logger.info("multi_gene 直接输入，无需 GEO 数据，跳过下载与清洗。")
             if not cfg.debug:
                 time.sleep(1)
         else:

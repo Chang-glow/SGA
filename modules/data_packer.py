@@ -4,8 +4,7 @@ from typing import Optional, Dict
 
 import pandas as pd
 
-from utils import loggers, Config, parse_user_input, safe_filepath
-from utils.paths import CONFIG_DIR
+from utils import loggers, Config, parse_user_input, safe_filepath, CONFIG_DIR
 
 
 class DataPacker:

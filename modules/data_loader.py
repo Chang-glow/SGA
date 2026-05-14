@@ -11,8 +11,7 @@ from typing import Optional, Dict
 import pandas as pd
 import yaml
 
-from utils import loggers, Config, parse_user_input, safe_filepath
-from utils.paths import CONFIG_DIR
+from utils import loggers, Config, parse_user_input, safe_filepath, CONFIG_DIR
 
 logging.getLogger("GEOparse").setLevel(logging.WARNING)
 
