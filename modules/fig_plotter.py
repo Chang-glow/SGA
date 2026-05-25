@@ -1,3 +1,4 @@
+import io
 import os
 from abc import ABC, abstractmethod
 import numpy as np
@@ -8,7 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from utils import Config, DataHandler, loggers, safe_filepath, FIGURE_DIR, RESULT_DIR, parse_tar_genes
+from utils import Config, DataHandler, loggers, safe_filepath, FIGURE_DIR, RESULT_DIR, parse_tar_genes, relpath, image_dedup_path
 from modules.calculater import fetch_gene_vector
 from modules.data_packer import DataPacker
 
@@ -280,11 +281,28 @@ class FigurePlotter(ABC):
         return safe_filepath(path)
 
     def _save_plot(self, fig_name: str) -> None:
-        # 保存图片
-        fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
         dpi = getattr(self.cfg, "figure_dpi", 300)
-        plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
+        buf = io.BytesIO()
+        plt.savefig(buf, dpi=dpi, bbox_inches='tight', format='png')
         plt.close()
+        content = buf.getvalue()
+
+        base_path = self._build_fig_path(fig_name)
+        if self.cfg.overwrite_figures:
+            with open(base_path, 'wb') as f:
+                f.write(content)
+            self._logger.info(f"图片已保存至 {relpath(base_path)}")
+            return
+
+        final_path = image_dedup_path(base_path, content)
+        if final_path is None:
+            stem = os.path.splitext(os.path.basename(base_path))[0]
+            self._logger.info(f"图片内容与已有 {stem}.png 相同，跳过保存")
+            return
+
+        with open(final_path, 'wb') as f:
+            f.write(content)
+        self._logger.info(f"图片已保存至 {relpath(final_path)}")
 
     def box_plotter(self) -> None:
         """箱线图pipeline — 支持多基因"""
@@ -491,10 +509,24 @@ class FigurePlotter(ABC):
         )
 
         fig_name = self._build_fig_name("heatmap.png")
-        fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        g.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
+        dpi = getattr(self.cfg, "figure_dpi", 300)
+        buf = io.BytesIO()
+        g.savefig(buf, dpi=dpi, bbox_inches="tight", format='png')
         plt.close(g.figure)
-        self._logger.info("热图绘制完成（聚类 + 分组注释）")
+        content = buf.getvalue()
+        base_path = self._build_fig_path(fig_name)
+        if self.cfg.overwrite_figures:
+            with open(base_path, 'wb') as f:
+                f.write(content)
+            self._logger.info("热图绘制完成（聚类 + 分组注释）")
+        else:
+            final_path = image_dedup_path(base_path, content)
+            if final_path is None:
+                self._logger.info("热图内容与已有文件相同，跳过保存")
+            else:
+                with open(final_path, 'wb') as f:
+                    f.write(content)
+                self._logger.info("热图绘制完成（聚类 + 分组注释）")
 
     def _rename_expr_columns_by_meta_order(self, expr_df: pd.DataFrame, full_meta: pd.DataFrame) -> pd.DataFrame:
         """尝试通过元数据顺序将表达矩阵的样本列映射为 GSM 样本名"""
@@ -786,10 +818,24 @@ class FigurePlotter(ABC):
                   ncol=2 if n_types > 15 else 1, frameon=False)
 
         fig.tight_layout()
-        fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
+        dpi = getattr(self.cfg, "figure_dpi", 300)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=dpi, bbox_inches="tight", format='png')
         plt.close(fig)
-        self._logger.info(f"堆叠柱状图已保存至 {fig_path}")
+        content = buf.getvalue()
+        base_path = self._build_fig_path(fig_name)
+        if self.cfg.overwrite_figures:
+            with open(base_path, 'wb') as f:
+                f.write(content)
+            self._logger.info(f"堆叠柱状图已保存至 {relpath(base_path)}")
+        else:
+            final_path = image_dedup_path(base_path, content)
+            if final_path is None:
+                self._logger.info("堆叠柱状图内容与已有文件相同，跳过保存")
+            else:
+                with open(final_path, 'wb') as f:
+                    f.write(content)
+                self._logger.info(f"堆叠柱状图已保存至 {relpath(final_path)}")
 
     def _ensure_immune_groups(self, immune_df):
         """确保有分组信息，immune 模式回退到配置匹配或样本名推断"""
@@ -875,7 +921,7 @@ class FigurePlotter(ABC):
                 )
 
         exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
-        title = f"Immune Cell Composition — {self.cfg.tar_gene} ({self.cfg.gse_id})"
+        title = f"Immune Cell Composition — {self._gene_token()} ({self.cfg.gse_id})"
         fig_name = self._build_fig_name("stacked_bar.png")
         self._stacked_bar_plot(immune_df, groups, title, fig_name)
 
@@ -912,13 +958,27 @@ class FigurePlotter(ABC):
         for j in range(i + 1, len(axes_flat)):
             axes_flat[j].set_visible(False)
 
-        fig.suptitle(f"Immune Cell Fractions — {self.cfg.tar_gene}",
+        fig.suptitle(f"Immune Cell Fractions — {self._gene_token()}",
                      fontsize=13, fontweight="bold", y=1.01)
         fig.tight_layout()
-        fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
+        dpi = getattr(self.cfg, "figure_dpi", 300)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=dpi, bbox_inches="tight", format='png')
         plt.close(fig)
-        self._logger.info(f"免疫浸润箱线图已保存至 {fig_path}")
+        content = buf.getvalue()
+        base_path = self._build_fig_path(fig_name)
+        if self.cfg.overwrite_figures:
+            with open(base_path, 'wb') as f:
+                f.write(content)
+            self._logger.info(f"免疫浸润箱线图已保存至 {relpath(base_path)}")
+        else:
+            final_path = image_dedup_path(base_path, content)
+            if final_path is None:
+                self._logger.info("免疫浸润箱线图内容与已有文件相同，跳过保存")
+            else:
+                with open(final_path, 'wb') as f:
+                    f.write(content)
+                self._logger.info(f"免疫浸润箱线图已保存至 {relpath(final_path)}")
 
     def immune_box_plots(self):
         """免疫细胞组间差异箱线图（子图网格）"""
@@ -1064,7 +1124,7 @@ class FigurePlotter(ABC):
 
         title_gene = genes[0] if n_genes == 1 else f"{n_genes} genes"
         fig, ax = plt.subplots(figsize=(max(10, n_cells * 0.5),
-                                        max(2.8, n_genes * 0.5)))
+                                        max(2.8, n_genes * 0.65)))
         sns.heatmap(corr_df, annot=annot.values if n_genes > 0 else annot.values,
                     fmt="", annot_kws={"fontsize": 6.5, "fontweight": "bold"},
                     cmap="RdBu_r", center=0, vmin=-1, vmax=1,
@@ -1075,14 +1135,29 @@ class FigurePlotter(ABC):
         ax.set_ylabel("")
         ax.set_xlabel("")
         ax.tick_params(axis="x", rotation=45, labelsize=7)
-        ax.tick_params(axis="y", labelsize=8)
+        ax.tick_params(axis="y", rotation=0, labelsize=8)
         fig.tight_layout()
         fig_name = self._build_fig_name("heatmap.png")
-        fig_path = self._resolve_save_path(self._build_fig_path(fig_name))
-        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight")
+        dpi = getattr(self.cfg, "figure_dpi", 300)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=dpi, bbox_inches="tight", format='png')
         plt.close(fig)
-        self._logger.info(f"免疫相关性热图已保存至 {fig_path}"
-                          + (f" (跳过基因: {skipped})" if skipped else ""))
+        content = buf.getvalue()
+        base_path = self._build_fig_path(fig_name)
+        if self.cfg.overwrite_figures:
+            with open(base_path, 'wb') as f:
+                f.write(content)
+            self._logger.info(f"免疫相关性热图已保存至 {relpath(base_path)}"
+                              + (f" (跳过基因: {skipped})" if skipped else ""))
+        else:
+            final_path = image_dedup_path(base_path, content)
+            if final_path is None:
+                self._logger.info("免疫相关性热图内容与已有文件相同，跳过保存")
+            else:
+                with open(final_path, 'wb') as f:
+                    f.write(content)
+                self._logger.info(f"免疫相关性热图已保存至 {relpath(final_path)}"
+                                  + (f" (跳过基因: {skipped})" if skipped else ""))
 
         # 另存 CSV
         csv_dir = os.path.join(RESULT_DIR, "csv")
@@ -1093,7 +1168,7 @@ class FigurePlotter(ABC):
         out_df = corr_df.copy()
         out_df.index.name = "Gene"
         out_df.to_csv(csv_path)
-        self._logger.info(f"免疫相关性数据已保存至 {csv_path}")
+        self._logger.info(f"免疫相关性数据已保存至 {relpath(csv_path)}")
 
     def _truncate_label(self, label: str, max_len: int = 55) -> str:
         if len(label) <= max_len:
@@ -1125,9 +1200,27 @@ class FigurePlotter(ABC):
         return df
 
     def _enrich_save(self, fig, fig_path: str):
-        fig_path = self._resolve_save_path(fig_path)
-        fig.savefig(fig_path, dpi=getattr(self.cfg, "figure_dpi", 300), bbox_inches="tight", facecolor="white")
+        dpi = getattr(self.cfg, "figure_dpi", 300)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=dpi, bbox_inches="tight", facecolor="white", format='png')
         plt.close(fig)
+        content = buf.getvalue()
+
+        if self.cfg.overwrite_figures:
+            with open(fig_path, 'wb') as f:
+                f.write(content)
+            self._logger.info(f"图片已保存至 {relpath(fig_path)}")
+            return
+
+        final_path = image_dedup_path(fig_path, content)
+        if final_path is None:
+            stem = os.path.splitext(os.path.basename(fig_path))[0]
+            self._logger.info(f"图片内容与已有 {stem}.png 相同，跳过保存")
+            return
+
+        with open(final_path, 'wb') as f:
+            f.write(content)
+        self._logger.info(f"图片已保存至 {relpath(final_path)}")
 
     def enrich_bar_plotter(self) -> None:
         """富集分析柱状图 — 自定义 matplotlib 实现"""
@@ -1162,6 +1255,7 @@ class FigurePlotter(ABC):
                 ax.set_xlabel(xlabel, fontsize=11)
                 ax.set_title(f"{self._gene_token()} — {gs}", fontsize=12, fontweight="bold")
                 ax.invert_yaxis()
+                ax.set_xscale("symlog", linthresh=max(1, np.percentile(values, 80)))
 
                 if self.cfg.p_threshold < 1:
                     ref = -np.log10(self.cfg.p_threshold) if "Adjusted" in xlabel else None
@@ -1312,6 +1406,7 @@ class FigurePlotter(ABC):
             df = self._prepare_enrich_data(gs_df, top_term=top_term, max_label_len=65) 
             all_scores.extend(df["Score"].values)
         global_norm = plt.Normalize(min(all_scores), max(all_scores))
+        linthresh = max(1, np.percentile(all_scores, 80))
 
         for ax, gs in zip(axes, go_sets):
             gs_df = enrich[enrich["Gene_set"] == gs]
@@ -1328,6 +1423,7 @@ class FigurePlotter(ABC):
             ax.set_yticks(range(len(df)))
             ax.set_yticklabels(labels.values, fontsize=9)
             ax.invert_yaxis()
+            ax.set_xscale("symlog", linthresh=linthresh)
 
             abbr = next((go_abbr[k] for k in go_abbr if k in gs), gs[:4])
             ax.text(1.02, 0.5, abbr, transform=ax.transAxes, fontsize=12,
@@ -1380,7 +1476,7 @@ class FigurePlotter(ABC):
         fname = f"{self.cfg.gse_id}_{self._gene_token()}_enrich_plotting_data.csv"
         out_path = self._resolve_save_path(os.path.join(csv_dir, fname))
         plot_df.to_csv(out_path, index=False)
-        self._logger.info(f"画图数据已保存至 {out_path}")
+        self._logger.info(f"画图数据已保存至 {relpath(out_path)}")
 
 
 class DataPlotter(FigurePlotter):

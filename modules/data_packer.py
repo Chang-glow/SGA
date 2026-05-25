@@ -4,7 +4,7 @@ from typing import Optional, Dict
 
 import pandas as pd
 
-from utils import loggers, Config, parse_user_input, safe_filepath, CONFIG_DIR
+from utils import loggers, Config, parse_user_input, safe_filepath, CONFIG_DIR, relpath
 
 
 class DataPacker:
@@ -313,7 +313,7 @@ class DataPacker:
 
         with open(memory_path, "w", encoding="utf-8") as f:
             yaml.dump(memory, f, allow_unicode=True, default_flow_style=False)
-        self._logger.info(f"分组记忆已保存至 {memory_path}")
+        self._logger.info(f"分组记忆已保存至 {relpath(memory_path)}")
 
     def _load_group_memory(self) -> Optional[dict]:
         """从记忆文件加载分组选择，若无记忆则返回 None"""

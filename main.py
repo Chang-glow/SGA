@@ -7,7 +7,7 @@ import time
 from modules import DataLoader, Analyzer, FigurePlotter, DataPacker
 from modules.strategies import NO_GEO_MODES
 
-from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR, parse_user_input, BASE_DIR
+from utils import loggers, Config, DataHandler, FIGURE_DIR, CONFIG_DIR, parse_user_input, BASE_DIR, relpath
 
 
 def _resolve_config(cfg: Config) -> None:
@@ -122,7 +122,7 @@ def main(cfg: Config):
             logger.info("开始绘图")
             plotter = FigurePlotter.create(cfg, data)
             plotter.plotter()
-            logger.info(f"绘图结果保存在{FIGURE_DIR}")
+            logger.info(f"绘图结果保存在 {relpath(FIGURE_DIR)}")
         else:
             logger.info("跳过阶段3（画图）")
 

@@ -8,7 +8,7 @@ import seaborn as sns
 from scipy import stats as sp_stats
 
 from modules.calculater import fetch_gene_vector, prepare_expr_matrix
-from utils import RESULT_DIR, FIGURE_DIR
+from utils import RESULT_DIR, FIGURE_DIR, relpath
 
 
 class WgcnaStrategy:
@@ -398,7 +398,7 @@ class WgcnaStrategy:
         filename = f"{self.cfg.gse_id}_{self.cfg.tar_gene}_{suffix}.csv"
         filepath = os.path.join(csv_dir, filename)
         df.to_csv(filepath, index=False)
-        self._logger.info(f"已保存: {filepath} ({df.shape[0]} 行 × {df.shape[1]} 列)")
+        self._logger.info(f"已保存: {relpath(filepath)} ({df.shape[0]} 行 × {df.shape[1]} 列)")
 
     def _save_csv(self, df, suffix):
         """保存 DataFrame 到 res/csv/"""
@@ -407,4 +407,4 @@ class WgcnaStrategy:
         filename = f"{self.cfg.gse_id}_{self.cfg.tar_gene}_{suffix}.csv"
         filepath = os.path.join(csv_dir, filename)
         df.to_csv(filepath, index=True, index_label="Sample")
-        self._logger.info(f"已保存: {filepath} ({df.shape[0]} 行 × {df.shape[1]} 列)")
+        self._logger.info(f"已保存: {relpath(filepath)} ({df.shape[0]} 行 × {df.shape[1]} 列)")

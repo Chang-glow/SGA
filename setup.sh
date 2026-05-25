@@ -92,6 +92,14 @@ CONF="${SGA_DIR}/conf/config.yaml"
 HELP_TXT="${SGA_DIR}/conf/help.txt"
 CORE_KEYS="CORE_KEYS_PLACEHOLDER"
 
+_shared_keys="gse_id tar_gene multi_gene data_dir process debug storage"
+_corr_keys="p_threshold custom_marker_dict log_threshold heatmap_top_n_genes group_select_col control_label exp_label"
+_diff_keys="p_threshold strict_filter log2fc_threshold max_output_genes min_samples_per_group gene_blacklist signs tar_tuple volcano_top_n_labels heatmap_top_n_genes group_select_col control_label exp_label"
+_hilo_keys="p_threshold log2fc_threshold max_output_genes log_threshold volcano_top_n_labels heatmap_top_n_genes group_select_col control_label exp_label"
+_enrich_keys="enrichment_source_mode enrichment_gene_sets organism max_input_genes enrichment_min_genes_fallback enrich_plot_top_terms p_threshold log2fc_threshold"
+_immune_keys="immune_method immune_low_abundance_threshold immune_boxplot_n_cols plot_data_warning"
+_wgcna_keys="wgcna_top_n_genes organism exp_type group_select_col control_label exp_label group_memory_enabled group_memory_use"
+
 _sga_version() {
     git -C "$SGA_DIR" describe --tags --abbrev=0 2>/dev/null || echo "未知"
 }
@@ -108,19 +116,35 @@ case "${1:-}" in
     config)
         shift
         if [ $# -eq 0 ]; then
-            printf "  %-28s = %s\n" "version" "$(_sga_version)"
+            printf "  %-35s = %s\n" "version" "$(_sga_version)"
             for key in $CORE_KEYS; do
                 val=$(grep "^${key}:" "$CONF" 2>/dev/null | head -1 | sed "s/^${key}: *//")
-                printf "  %-28s = %s\n" "$key" "${val:-<未设置>}"
+                printf "  %-35s = %s\n" "$key" "${val:-<未设置>}"
             done
             echo ""
-            echo "  用法: sga config [--all | <key>]"
-            echo "  sga config --all    查看完整配置"
-            echo "  sga config gse_id   查看单个配置项"
+            echo "  用法: sga config [--all | <key> | <mode>]"
+            echo "  sga config --all       查看完整配置"
+            echo "  sga config gse_id      查看单个配置项"
+            echo "  sga config immune      查看某分析模式的所有配置"
         elif [ "$1" = "--all" ]; then
             cat "$CONF"
         else
-            if [ "$1" = "version" ]; then
+            _mode_keys=""
+            case "$1" in
+                corr)   _mode_keys="$_corr_keys" ;;
+                diff)   _mode_keys="$_diff_keys" ;;
+                hilo)   _mode_keys="$_hilo_keys" ;;
+                enrich) _mode_keys="$_enrich_keys" ;;
+                immune) _mode_keys="$_immune_keys" ;;
+                wgcna)  _mode_keys="$_wgcna_keys" ;;
+            esac
+            if [ -n "${_mode_keys}" ]; then
+                printf "  %-35s = %s\n" "version" "$(_sga_version)"
+                for key in $_shared_keys $_mode_keys; do
+                    val=$(grep "^${key}:" "$CONF" 2>/dev/null | head -1 | sed "s/^${key}: *//")
+                    printf "  %-35s = %s\n" "$key" "${val:-<未设置>}"
+                done
+            elif [ "$1" = "version" ]; then
                 _sga_version
             else
                 val=$(grep "^${1}:" "$CONF" 2>/dev/null | head -1 | sed "s/^${1}: *//")
@@ -130,7 +154,7 @@ case "${1:-}" in
         exit 0
         ;;
     *)
-        conda run -n SGA python "${SGA_DIR}/main.py" "$@"
+        conda run --no-capture-output -n SGA python -u "${SGA_DIR}/main.py" "$@"
         ;;
 esac
 SGAEOF

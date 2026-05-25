@@ -8,7 +8,7 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from utils import loggers, Config, DataHandler, RESULT_DIR, resolve_save_path, df_content_hash
+from utils import loggers, Config, DataHandler, RESULT_DIR, resolve_save_path, df_content_hash, relpath
 from modules.data_packer import DataPacker
 
 
@@ -204,10 +204,16 @@ class Analyzer(ABC):
             cls._logger.info("开始从数据包中分析")
             return DataAnalyzer(cfg, data)
         else:
-            raise RuntimeError(
-                "未找到可用数据源。请确保先执行阶段1（数据下载与清洗），"
-                "或使用 debug=false 启用缓存读取。"
-            )
+            if cfg.debug and "1" not in str(cfg.process):
+                hint = (
+                    "debug=true 会跳过数据包缓存读取，且 process 不含 '1' 跳过了数据下载，"
+                    "两者同时生效导致无数据可用。请设置 debug=false 以读取缓存，或在 process 中加入 '1' 以重新下载数据。"
+                )
+            elif cfg.debug:
+                hint = "debug=true 已跳过数据包缓存读取，且未加载到内存数据。请设置 debug=false 后重试。"
+            else:
+                hint = "未找到数据包缓存，请确保先执行阶段1（数据下载与清洗）。"
+            raise RuntimeError(hint)
 
 
     def calculate(self) -> pd.DataFrame:
@@ -318,7 +324,7 @@ class Analyzer(ABC):
         """判断数据是否已经 log 转化"""
         numeric_df = df.select_dtypes(include=[np.number])
         if numeric_df.empty:
-            return True  # 无数值列，视为已转化（无法判断）
+            return True  # 无数值列，视为已转化
         max_val = numeric_df.max().max()
         # 阈值可根据实际数据调整，默认为50
         return max_val <= self.cfg.log_threshold
@@ -607,7 +613,7 @@ class Analyzer(ABC):
                 save_mode(storage_path, index=False)
             else:
                 save_mode(storage_path)
-            self._logger.info(f"{fmt}文件已保存至{storage_path}")
+            self._logger.info(f"{fmt}文件已保存至 {relpath(storage_path)}")
         except PermissionError as e:
             self._logger.error(f"无法写入{fmt}，错误：{e}")
         except OSError as e:

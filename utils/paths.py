@@ -9,6 +9,14 @@ CONFIG_DIR = os.path.join(BASE_DIR, "conf")
 LOGGER_DIR = os.path.join(BASE_DIR, "error_logs")
 
 
+def relpath(path: str) -> str:
+    """将绝对路径转为相对于项目根目录的路径，用于日志输出"""
+    try:
+        return os.path.relpath(path, BASE_DIR)
+    except ValueError:
+        return path
+
+
 def dirs_init():
     for d in [BASE_DIR, DATA_DIR, RESULT_DIR, FIGURE_DIR, CONFIG_DIR, LOGGER_DIR]:
         os.makedirs(d, exist_ok=True)

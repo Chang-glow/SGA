@@ -1,4 +1,5 @@
 import os
+import re
 import hashlib
 from typing import Optional
 
@@ -63,3 +64,30 @@ def resolve_save_path(filepath: str, content_hash: Optional[str] = None) -> Opti
             return None
 
     return safe_filepath(filepath)
+
+
+def image_dedup_path(base_path: str, content_bytes: bytes) -> Optional[str]:
+    """图片哈希去重：扫描目录中所有同名 (n) 变体，内容匹配则跳过
+
+    Args:
+        base_path: 期望的文件路径
+        content_bytes: 新图像内容的字节
+
+    Returns:
+        None 表示已有内容相同的文件，无需保存；否则返回安全的写入路径
+    """
+    new_hash = hashlib.md5(content_bytes).hexdigest()
+
+    dirpath = os.path.dirname(base_path)
+    stem, ext = os.path.splitext(os.path.basename(base_path))
+    pattern = re.compile(rf"^{re.escape(stem)}(?: \(\d+\))?{re.escape(ext)}$")
+
+    if os.path.isdir(dirpath):
+        for fname in os.listdir(dirpath):
+            if not pattern.fullmatch(fname):
+                continue
+            existing_path = os.path.join(dirpath, fname)
+            if file_md5(existing_path) == new_hash:
+                return None
+
+    return safe_filepath(base_path)

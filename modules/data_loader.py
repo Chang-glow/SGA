@@ -11,7 +11,7 @@ from typing import Optional, Dict
 import pandas as pd
 import yaml
 
-from utils import loggers, Config, parse_user_input, safe_filepath, CONFIG_DIR
+from utils import loggers, Config, parse_user_input, safe_filepath, CONFIG_DIR, relpath
 
 logging.getLogger("GEOparse").setLevel(logging.WARNING)
 
@@ -323,7 +323,7 @@ class DataLoader:
             file_name = f"{self.cfg.gse_id}_soft_extracted.txt"
             file_path = safe_filepath(os.path.join(data_dir, file_name))
             gene_matrix.to_csv(file_path, sep="\t")
-            DataLoader._logger.info(f"已保存至 {file_path}")
+            DataLoader._logger.info(f"已保存至 {relpath(file_path)}")
 
             return {file_name: file_path}
 

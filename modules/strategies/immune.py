@@ -76,7 +76,7 @@ class ImmuneStrategy:
                 f"vs {expr_df.shape[0]} (表达矩阵)"
             )
 
-        self._logger.info("正在去卷积（无进度条，完成后自动输出结果）...")
+        self._logger.info("正在去卷积...")
         result = td.tumor_deconvolve(
             expr_df,
             method=method,
