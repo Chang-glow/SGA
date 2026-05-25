@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, List
 
 from utils import loggers, Config, DataHandler, RESULT_DIR, resolve_save_path, df_content_hash, relpath
 from modules.data_packer import DataPacker
@@ -146,6 +146,98 @@ def fetch_gene_vector(df, tar_gene) -> pd.Series:
 
     logger.warning(f"未能在矩阵中找到基因: {tar_gene}")
     return pd.Series(dtype=float)
+
+
+def detect_gene_case_convention(index: pd.Index, sample_size: int = 100) -> str:
+    """从表达矩阵行索引采样，检测基因命名规则。
+
+    Returns:
+        'human' — 全大写（如 ACTA2, TNF）
+        'mouse' — 首字母大写其余小写（如 Acta2, Tnf）
+    """
+    candidates: List[str] = []
+    for g in index:
+        s = str(g).strip()
+        if not s or s.lower() in ('nan', 'none', ''):
+            continue
+        if s[0].isdigit():
+            continue
+        if len(s) < 2:
+            continue
+        candidates.append(s)
+        if len(candidates) >= sample_size:
+            break
+
+    if not candidates:
+        return 'human'
+
+    upper_count = 0
+    title_count = 0
+    for g in candidates:
+        alpha_chars = [c for c in g if c.isalpha()]
+        if not alpha_chars:
+            continue
+        if all(c.isupper() for c in alpha_chars):
+            upper_count += 1
+        first_alpha_idx = next((i for i, c in enumerate(g) if c.isalpha()), None)
+        if first_alpha_idx is not None:
+            tail_alpha = [c for c in g[first_alpha_idx + 1:] if c.isalpha()]
+            if (tail_alpha and g[first_alpha_idx].isupper()
+                    and all(c.islower() for c in tail_alpha)):
+                title_count += 1
+
+    return 'human' if upper_count >= title_count else 'mouse'
+
+
+def normalize_gene_symbol(gene: str, convention: str) -> str:
+    """将单个基因符号转为指定命名规则格式。"""
+    if not gene or not gene.strip():
+        return gene
+    if convention == 'human':
+        return gene.upper()
+    elif convention == 'mouse':
+        return gene[0].upper() + gene[1:].lower()
+    return gene
+
+
+def normalize_tar_gene_from_pack(cfg, meta_matrix_pack: dict) -> None:
+    """从 pack 中提取表达矩阵，检测基因命名规则，原地修改 cfg.tar_gene。
+
+    仅在内存中修改，不写回配置文件。
+    跳过 enrich 模式（无表达矩阵）或无 tar_gene 的情况。
+    """
+    import logging
+
+    if not cfg.tar_gene:
+        return
+    if cfg.analysis_mode == "enrich":
+        return
+    if not meta_matrix_pack:
+        return
+
+    expr_df = None
+    for key, val in meta_matrix_pack.items():
+        if key in ('meta', 'meta_full', 'group_info', '_batch_exp_groups'):
+            continue
+        if isinstance(val, pd.DataFrame):
+            expr_df = val
+            break
+        if isinstance(val, dict) and 'matrix_aligned' in val:
+            expr_df = val['matrix_aligned']
+            break
+
+    if expr_df is None or expr_df.empty:
+        return
+
+    convention = detect_gene_case_convention(expr_df.index)
+    new_gene = normalize_gene_symbol(cfg.tar_gene, convention)
+    if new_gene != cfg.tar_gene:
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"基因符号已规范化: {cfg.tar_gene!r} → {new_gene!r}"
+            f"（检测到 {convention} 命名规则）"
+        )
+        cfg.tar_gene = new_gene
 
 
 class Analyzer(ABC):

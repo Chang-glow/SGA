@@ -14,7 +14,7 @@ class Config:
     gse_id: str = ""
     version: str = "0.3.3"
     group_select_col: Optional[str] = "source_name_ch1"
-    control_label: Optional[List[str]] = field(default_factory=lambda: ["control"])
+    control_label: Optional[List[str]] = field(default_factory=lambda: ["control", "ND"])
     exp_label: Optional[List[str]] = field(default_factory=lambda: ["CCl4"])
     exp_type: Optional[str] = "Fibrosis"
     analysis_mode: str = "diff"
@@ -56,6 +56,7 @@ class Config:
     plot_data_warning: bool = True   # 画图数据合理性 warning 开关（通用）
     process: str = "123"
     wgcna_top_n_genes: int = 3000    # WGCNA 筛选基因数
+    _batch_suffix: str = field(default="", init=False)  # 批处理文件后缀（运行时注入，非 Hydra 配置项）
 
     def __post_init__(self):
         # 互斥检查：multi_gene 优先，自动清 tar_gene

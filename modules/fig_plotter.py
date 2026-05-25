@@ -267,7 +267,8 @@ class FigurePlotter(ABC):
             token = f"multi_{len(parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene))}genes"
         else:
             token = parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)[0]
-        return f"{self.cfg.gse_id}_{token}_{self.cfg.analysis_mode}_{suffix}"
+        return f"{self.cfg.gse_id}_{token}_{self.cfg.analysis_mode}" \
+               f"{getattr(self.cfg, '_batch_suffix', '')}_{suffix}"
 
     def _build_fig_path(self, fig_name: str) -> str:
         mode_dir = os.path.join(FIGURE_DIR, self.cfg.analysis_mode)
@@ -309,7 +310,10 @@ class FigurePlotter(ABC):
         if not self._meta_matrix_pack:
             self._load_data()
 
-        for gene in parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene):
+        genes = self._normalize_genes_to_convention(
+            parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
+        )
+        for gene in genes:
             self._logger.info(f"正在准备 {gene} 的差异分析数据...")
             data_dict = self._prepare_diff_data(gene=gene)
             self._logger.info(f"{gene} 差异分析数据准备完成，正在绘图...")
@@ -321,8 +325,7 @@ class FigurePlotter(ABC):
                 data_dict['title'],
                 fig_name=fig_name,
             )
-        n = len(parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene))
-        self._logger.info(f"差异分析箱线图绘制完成！(共 {n} 个基因)")
+        self._logger.info(f"差异分析箱线图绘制完成！(共 {len(genes)} 个基因)")
 
     def _get_expr_matrix(self) -> pd.DataFrame:
         """从 _meta_matrix_pack 中提取表达矩阵 DataFrame"""
@@ -335,6 +338,18 @@ class FigurePlotter(ABC):
             elif isinstance(val, pd.DataFrame):
                 return val
         raise KeyError("No expression matrix found in _meta_matrix_pack")
+
+    def _normalize_genes_to_convention(self, genes: list) -> list:
+        """将基因列表中的每个基因规范化为表达矩阵的命名规则（首字母大写或全大写）。"""
+        from modules.calculater import detect_gene_case_convention, normalize_gene_symbol
+        try:
+            expr_df = self._get_expr_matrix()
+        except KeyError:
+            return genes
+        if expr_df is None or expr_df.empty:
+            return genes
+        convention = detect_gene_case_convention(expr_df.index)
+        return [normalize_gene_symbol(g, convention) for g in genes]
 
     def volcano_plotter(self) -> None:
         """火山图 — 竖线 ±1，下调蓝色 / 上调红色，标注显著基因名"""
@@ -424,7 +439,9 @@ class FigurePlotter(ABC):
 
         top_n = getattr(self.cfg, "heatmap_top_n_genes", 20)
         top_genes = data.sort_values('padj').head(top_n)['Gene'].tolist()
-        target_genes = parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
+        target_genes = self._normalize_genes_to_convention(
+            parse_tar_genes(self.cfg.tar_gene, self.cfg.multi_gene)
+        )
         missing = [g for g in target_genes if g not in top_genes]
         if missing:
             top_genes = top_genes[:top_n - len(missing)] + missing

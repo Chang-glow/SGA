@@ -18,6 +18,7 @@ class DataPacker:
         self._chosen_meta = None
         self._group_mapping = {}
         self._group_col = None
+        self._batch_exp_groups = []  # 批处理队列: [(短标签, 原始值), ...]
 
     def build_pack(self) -> dict:
         """构建数据包"""
@@ -78,6 +79,9 @@ class DataPacker:
                 "group_col": self._group_col,
                 "mapping": self._group_mapping
             }
+
+        if self._batch_exp_groups:
+            meta_matrix_pack["_batch_exp_groups"] = self._batch_exp_groups
 
         if self.cfg.storage:
             self._save_pack(meta_matrix_pack)
@@ -196,6 +200,10 @@ class DataPacker:
         control_labels = self._normalize_labels(control_label)
         exp_labels = self._normalize_labels(exp_label)
 
+        # 肝纤维化模式：实验组优先匹配 MCD / CDAHFD
+        if self.cfg.exp_type == "Fibrosis":
+            exp_labels = self._normalize_labels(["MCD", "CDAHFD"])
+
         if group_select_col not in meta.columns:
             self._logger.warning(f"未在元数据中找到指定的分组列 '{group_select_col}'，进入交互式分组流程")
             self._manual_group_division(meta)
@@ -210,6 +218,47 @@ class DataPacker:
             g for g in unique_groups
             if any(label in str(g).lower() for label in exp_labels)
         ]
+
+        # 同时匹配到 MCD 和 CDAHFD 时的处理（记忆 + 交互选择）
+        if self.cfg.exp_type == "Fibrosis" and len(exp_groups) > 1:
+            saved_choice = None
+            memory = self._load_group_memory()
+            if memory:
+                saved_choice = memory.get("_fibrosis_exp_choice")
+
+            if saved_choice is not None:
+                if saved_choice == "__both__":
+                    self._batch_exp_groups = self._build_batch_tuples(exp_groups)
+                    exp_groups = [self._batch_exp_groups[0][1]]
+                    self._logger.info(
+                        f"从记忆恢复：将依次分析 {[t[0] for t in self._batch_exp_groups]}"
+                    )
+                else:
+                    matched = [g for g in exp_groups if saved_choice in str(g).lower()]
+                    if matched:
+                        exp_groups = [matched[0]]
+                        self._logger.info(f"从记忆恢复实验组选择: {exp_groups[0]}")
+
+            if len(exp_groups) > 1:
+                self._logger.info(f"Fibrosis 模式下同时匹配到多个实验组: {exp_groups}")
+                print(f"\n检测到多个可能的 {self.cfg.exp_type} 实验分组:")
+                for i, g in enumerate(exp_groups):
+                    print(f"  [{i}] {g}")
+                print("  [b] 两者都分析（依次进行完整分析并分别画图）")
+                choice = parse_user_input(
+                    prompt=f"请选择实验组 (0-{len(exp_groups) - 1}) 或输入 'b' 同时分析两者: ",
+                    max_index=len(exp_groups) - 1,
+                    whitelist="b",
+                )
+                if choice == "b":
+                    self._batch_exp_groups = self._build_batch_tuples(exp_groups)
+                    self._save_fibrosis_exp_choice("__both__")
+                    exp_groups = [self._batch_exp_groups[0][1]]
+                    self._logger.info(f"将依次分析: {[t[0] for t in self._batch_exp_groups]}")
+                elif choice and isinstance(choice, list):
+                    picked = exp_groups[choice[0]]
+                    self._save_fibrosis_exp_choice(picked)
+                    exp_groups = [picked]
 
         if control_groups and exp_groups:
             self._chosen_meta = meta[meta[group_select_col].isin(control_groups + exp_groups)]
@@ -325,6 +374,75 @@ class DataPacker:
         gse = self.cfg.gse_id
         mode = self.cfg.analysis_mode
         return memory.get(gse, {}).get(mode)
+
+    @staticmethod
+    def _build_batch_tuples(exp_groups: list) -> list:
+        """将原始分组值映射为 (短标签, 原始值) 二元组，用于批处理文件命名和过滤。"""
+        result = []
+        for g in exp_groups:
+            g_lower = str(g).lower()
+            if "cdahfd" in g_lower:
+                result.append(("CDAHFD", g))
+            elif "mcd" in g_lower:
+                result.append(("MCD", g))
+            else:
+                result.append((g, g))
+        return result
+
+    def _save_fibrosis_exp_choice(self, choice_value: str) -> None:
+        """保存 Fibrosis 实验组选择到记忆文件（单选值或 '__both__'）。"""
+        memory_path = os.path.join(CONFIG_DIR, "group_memory.yaml")
+        memory = {}
+        if os.path.exists(memory_path):
+            with open(memory_path, "r", encoding="utf-8") as f:
+                memory = yaml.safe_load(f) or {}
+        gse = self.cfg.gse_id
+        mode = self.cfg.analysis_mode
+        memory.setdefault(gse, {}).setdefault(mode, {})["_fibrosis_exp_choice"] = choice_value
+        with open(memory_path, "w", encoding="utf-8") as f:
+            yaml.dump(memory, f, allow_unicode=True, default_flow_style=False)
+        self._logger.info(f"Fibrosis 实验组选择已记忆: {choice_value}")
+
+    def rebuild_group_for_batch(self, prev_pack: dict, next_label: str, next_value) -> dict:
+        """用批处理队列中的下一个实验组重建 pack 的分组信息。
+
+        Args:
+            prev_pack: 上一个 pack（需包含 meta_full 和表达矩阵）
+            next_label: 短标签，如 "MCD"
+            next_value: 原始分组值，用于过滤 meta
+
+        Returns:
+            新 pack，_batch_exp_groups 已弹出当前项
+        """
+        meta_full = prev_pack["meta_full"].copy()
+        exp_type = self.cfg.exp_type if self.cfg.exp_type else "Experiment"
+
+        control_values = self._group_mapping.get("Control", [])
+        self._group_mapping = {"Control": control_values, exp_type: [next_value]}
+
+        chosen_meta = meta_full[
+            meta_full[self._group_col].isin(control_values + [next_value])
+        ].copy()
+        chosen_meta["group"] = chosen_meta[self._group_col].apply(self._map_group)
+        chosen_meta = chosen_meta[chosen_meta["group"].notna()]
+
+        new_pack = {"meta": chosen_meta, "meta_full": meta_full}
+        for key, val in prev_pack.items():
+            if key in ("meta", "meta_full", "group_info", "_batch_exp_groups"):
+                continue
+            new_pack[key] = val
+
+        new_pack["group_info"] = {
+            "group_col": self._group_col,
+            "mapping": self._group_mapping,
+        }
+        remaining = prev_pack.get("_batch_exp_groups", [])
+        if len(remaining) > 1:
+            new_pack["_batch_exp_groups"] = remaining[1:]
+
+        if self.cfg.storage:
+            self._save_pack(new_pack)
+        return new_pack
 
     def _select_hilo_expression_file(self) -> str:
         """选择用于 hilo 分组的表达矩阵文件"""

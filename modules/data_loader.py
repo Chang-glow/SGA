@@ -117,10 +117,7 @@ class DataLoader:
         sys.stdout.flush()
 
     def _get_gse(self) -> GEOparse.GEOTypes.GSE:
-        """获取GEO数据包
-
-        SOFT 文件保留在 data/{GSE_ID}/，GEOparse 调用期间 CWD 隔离到 /tmp，
-        防止平台注释等中间文件污染项目根目录。
+        """获取 GEO 数据包。"""
 
         Returns:
             gse: 下载的数据包
