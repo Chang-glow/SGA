@@ -19,18 +19,19 @@ class ImmuneStrategy:
         """
         pack = self.analyzer.roaming_data()
 
-        # 查找表达矩阵
-        expr_df = None
-        for key in pack:
-            if key in ("meta", "meta_full", "group_info"):
-                continue
-            item = pack[key]
-            if isinstance(item, dict) and "matrix_aligned" in item:
-                expr_df = item["matrix_aligned"]
-            elif isinstance(item, pd.DataFrame):
-                expr_df = item
-            if expr_df is not None:
-                break
+        # 查找表达矩阵：优先用合并后的 expr_matrix（经过 Ensembl→Symbol 转换）
+        expr_df = pack.get("expr_matrix")
+        if expr_df is None:
+            for key in pack:
+                if key in ("meta", "meta_full", "group_info"):
+                    continue
+                item = pack[key]
+                if isinstance(item, dict) and "matrix_aligned" in item:
+                    expr_df = item["matrix_aligned"]
+                elif isinstance(item, pd.DataFrame):
+                    expr_df = item
+                if expr_df is not None:
+                    break
 
         if expr_df is None:
             raise ValueError("未在数据包中找到表达矩阵，无法进行免疫浸润分析")
@@ -68,13 +69,53 @@ class ImmuneStrategy:
             self._logger.info("加载 LM22 基因集...")
             up_genes = td.read_geneset()
 
+        # 人鼠同源基因转换：当物种为 mouse 时，将小鼠基因符号转为人类同源基因
+        organism = pack.get("_organism") or getattr(self.cfg, "organism", "human")
+        if organism == "mouse":
+            self._logger.info("检测到物种: mouse，正在查询人鼠同源基因映射...")
+            from modules.calculater import (
+                map_mouse_genes_to_human_orthologs,
+                apply_ortholog_conversion,
+            )
+            mouse_genes = expr_df.index.astype(str).tolist()
+            ortholog_map = map_mouse_genes_to_human_orthologs(
+                mouse_genes, logger=self._logger
+            )
+            if ortholog_map:
+                expr_df = apply_ortholog_conversion(expr_df, ortholog_map, self._logger)
+            else:
+                self._logger.warning(
+                    "未能获取人鼠同源基因映射，将使用原始基因符号（与 LM22 可能不匹配）"
+                )
+
         # 记录基因重叠情况，方便排查问题
         if sig_matrix is not None:
+            # 跨物种适配：将表达矩阵基因符号规范化到签名矩阵的命名规则
+            from modules.calculater import detect_gene_case_convention, normalize_gene_symbol
+            sig_conv = detect_gene_case_convention(sig_matrix.index)
+            expr_conv = detect_gene_case_convention(expr_df.index)
+            if expr_conv != sig_conv:
+                self._logger.info(f"基因符号转换: {expr_conv} → {sig_conv}")
+                expr_df = expr_df.copy()
+                expr_df.index = expr_df.index.astype(str).map(
+                    lambda g: normalize_gene_symbol(g, sig_conv)
+                )
+                # 同源映射（处理人鼠不同名的基因）
+                homolog_map = getattr(self.cfg, "homolog_map", {}) or {}
+                if homolog_map:
+                    rev_map = {v: k for k, v in homolog_map.items()}
+                    expr_df.index = expr_df.index.map(lambda g: rev_map.get(g, g))
+
             overlap = set(expr_df.index) & set(sig_matrix.index)
             self._logger.info(
                 f"基因重叠: {len(overlap)}/{len(sig_matrix.index)} (签名矩阵) "
                 f"vs {expr_df.shape[0]} (表达矩阵)"
             )
+            if len(overlap) == 0:
+                raise ValueError(
+                    "表达矩阵与 LM22 签名矩阵无基因重叠，"
+                    "请确认数据集物种与签名矩阵一致（LM22 为人类）"
+                )
 
         self._logger.info("正在去卷积...")
         result = td.tumor_deconvolve(

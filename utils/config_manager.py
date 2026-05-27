@@ -22,6 +22,7 @@ class Config:
     storage: bool = True
     strict_mode: bool = False
     debug: bool = False
+    force: bool = False  # 强制重新打包+分析，跳过所有缓存（区别于 debug 的日志/交互控制）
     log_threshold: int = 50
     p_threshold: float = 0.05
     signs: List[str] = field(default_factory=lambda: ["positive", "negative"])
@@ -44,6 +45,7 @@ class Config:
     group_memory_use: bool = False
     tar_tuple: str = ""
     custom_marker_dict: Dict[str, List[str]] = field(default_factory=dict)  # 相关性分析自定义标志物基因集
+    homolog_map: Dict[str, str] = field(default_factory=dict)  # 人↔小鼠同源基因符号映射
     immune_method: str = "DeconRNASeq"
     immune_low_abundance_threshold: float = 0.001  # 免疫低丰度细胞过滤阈值
     multi_gene: str = ""           # 多基因：逗号分隔 OR 文件路径（每行一个基因）
@@ -84,6 +86,7 @@ class DataHandler:
     meta_matrix_pack: Optional[dict] = None
     gene_corr_table: Optional[pd.DataFrame] = None
     gene_diff_table: Optional[pd.DataFrame] = None
+    gene_hilo_table: Optional[pd.DataFrame] = None
     gene_enrich_table: Optional[pd.DataFrame] = None
     gene_immune_table: Optional[pd.DataFrame] = None
     gene_wgcna_table: Optional[pd.DataFrame] = None

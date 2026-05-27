@@ -22,10 +22,50 @@ class FigurePlotter(ABC):
     """
     _logger = loggers.get_logger()
 
+    # 分析模式元数据：统一管理 attr、PKL 后缀、标签等信息
+    _MODE_META = {
+        "corr": {
+            "attr": "gene_corr_table",
+            "internal_attr": "_gene_corr_table",
+            "summary_suffix": "correlation_summary",
+            "label": "基因相关性",
+            "needs_pack": True,
+        },
+        "diff": {
+            "attr": "gene_diff_table",
+            "internal_attr": "_gene_diff_table",
+            "summary_suffix": "differential_summary",
+            "label": "基因差异",
+            "needs_pack": True,
+        },
+        "hilo": {
+            "attr": "gene_diff_table",
+            "internal_attr": "_gene_diff_table",
+            "summary_suffix": "highlow_summary",
+            "label": "基因高低表达",
+            "needs_pack": True,
+        },
+        "enrich": {
+            "attr": "gene_enrich_table",
+            "internal_attr": "_gene_enrich_table",
+            "summary_suffix": "enrichment_summary",
+            "label": "基因富集",
+            "needs_pack": False,
+        },
+        "immune": {
+            "attr": "gene_immune_table",
+            "internal_attr": "_gene_immune_table",
+            "summary_suffix": "immune_summary",
+            "label": "免疫浸润",
+            "needs_pack": True,
+        },
+    }
+
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._gene_corr_table: Optional[pd.DataFrame] = None
         self._gene_diff_table: Optional[pd.DataFrame] = None
+        self._gene_hilo_table: Optional[pd.DataFrame] = None
         self._gene_enrich_table: Optional[pd.DataFrame] = None
         self._gene_immune_table: Optional[pd.DataFrame] = None
         self._meta_matrix_pack: Optional[dict] = None
@@ -36,35 +76,26 @@ class FigurePlotter(ABC):
     def create(cls, cfg: Config, data: DataHandler):
         """根据cfg检查使用哪个子类"""
         data_dir = os.path.join(cfg.data_dir, cfg.gse_id)
+        meta = cls._MODE_META.get(cfg.analysis_mode)
         data_pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
-        gene_corr_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_correlation_summary.pkl")
-        gene_diff_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_differential_summary.pkl")
-        gene_hilo_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_highlow_summary.pkl")
-        gene_enrich_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_enrichment_summary.pkl")
-        gene_immune_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_immune_summary.pkl")
-
         is_pack = os.path.exists(data_pack_path)
-        if cfg.analysis_mode == "corr":
-            is_table = os.path.exists(gene_corr_path)
-        elif cfg.analysis_mode == "diff":
-            is_table = os.path.exists(gene_diff_path)
-        elif cfg.analysis_mode == "hilo":
-            is_table = os.path.exists(gene_hilo_path)
-        elif cfg.analysis_mode == "enrich":
-            is_table = os.path.exists(gene_enrich_path)
-        elif cfg.analysis_mode == "immune":
-            is_table = os.path.exists(gene_immune_path)
-        elif cfg.analysis_mode == "wgcna":
+
+        if cfg.analysis_mode == "wgcna":
             is_table = True  # WGCNA 不生成图表，跳过
+        elif meta:
+            table_path = os.path.join(data_dir, "pkl", f"{cfg.gse_id}_{meta['summary_suffix']}.pkl")
+            is_table = os.path.exists(table_path)
         else:
             cls._logger.warning(f"未知分析模式：{cfg.analysis_mode}，将默认使用数据包画图")
             is_table = False
 
         if is_pack and is_table:
             return FilePlotter(cfg)
-        elif (is_pack and not is_table) or (is_table and not is_pack):
-            lack = "pack" if is_table else "table"
-            cls._logger.warning(f"{lack}数据缺失，分析可能出错")
+        elif is_pack and not is_table:
+            cls._logger.warning("table 数据缺失，将使用内存数据")
+            return DataPlotter(cfg, data)
+        elif is_table and not is_pack:
+            cls._logger.warning("pack 数据缺失，分析可能出错")
             return FilePlotter(cfg)
         else:
             return DataPlotter(cfg, data)
@@ -110,12 +141,18 @@ class FigurePlotter(ABC):
             self.volcano_plotter()
             self.heatmap_plotter()
         elif self.cfg.analysis_mode == "enrich":
+            if self._gene_enrich_table is None or self._gene_enrich_table.empty:
+                self._logger.warning("富集分析结果为空，跳过绘图")
+                return
             self._logger.info("分析模式设定为富集分析,将绘制富集条形图、气泡图和 GO 合集条形图")
             self.enrich_bar_plotter()
             self.enrich_dot_plotter()
             self.enrich_go_combined_bar()
             self._save_enrich_plotting_csv()
         elif self.cfg.analysis_mode == "immune":
+            if self._gene_immune_table is None or self._gene_immune_table.empty:
+                self._logger.warning("免疫浸润分析结果为空，跳过绘图")
+                return
             self._logger.info("分析模式设定为免疫浸润分析，将绘制堆叠柱状图、组间箱线图、相关性热图")
             self.immune_stacked_bar()
             self.immune_box_plots()
@@ -155,10 +192,12 @@ class FigurePlotter(ABC):
         self._logger.info(f"将以p值阈值为{p_thr}为条件筛选因子")
         targets = self._gene_corr_table[p_condition]
 
-        # 排序映射颜色
+        # 按基因聚合（多矩阵来源的同一基因对取均值）
+        targets = targets.groupby("Gene", as_index=False).agg({"R": "mean", "P_value": "mean"})
+
         targets = targets.sort_values(by="R", ascending=False)
         colors = ["red" if x > 0 else "blue" for x in targets["R"]]
-        
+
         return targets, colors
 
     def _bar_plot(self, x: pd.Series, y: pd.Series, colors: list) -> None:
@@ -271,7 +310,7 @@ class FigurePlotter(ABC):
                f"{getattr(self.cfg, '_batch_suffix', '')}_{suffix}"
 
     def _build_fig_path(self, fig_name: str) -> str:
-        mode_dir = os.path.join(FIGURE_DIR, self.cfg.analysis_mode)
+        mode_dir = os.path.join(FIGURE_DIR, self.cfg.analysis_mode, self.cfg.gse_id)
         os.makedirs(mode_dir, exist_ok=True)
         return os.path.join(mode_dir, fig_name)
 
@@ -328,16 +367,53 @@ class FigurePlotter(ABC):
         self._logger.info(f"差异分析箱线图绘制完成！(共 {len(genes)} 个基因)")
 
     def _get_expr_matrix(self) -> pd.DataFrame:
-        """从 _meta_matrix_pack 中提取表达矩阵 DataFrame"""
+        """从 _meta_matrix_pack 中提取表达矩阵 DataFrame
+
+        优先返回合并后的 expr_matrix（SuperSeries），否则提取并预处理第一个子系列矩阵。
+        """
+        # 优先使用合并后的表达矩阵（含 SYMBOL 列）
+        if "expr_matrix" in self._meta_matrix_pack:
+            val = self._meta_matrix_pack["expr_matrix"]
+            if isinstance(val, pd.DataFrame):
+                return self._ensure_gene_labels(val)
+            if isinstance(val, dict) and "matrix_aligned" in val:
+                return self._ensure_gene_labels(val["matrix_aligned"])
+
+        expr_df = None
         for key, val in self._meta_matrix_pack.items():
-            if key in {'meta', 'meta_full'}:
+            if key in {"meta", "meta_full"}:
                 continue
-            # 兼容 strict_mode 嵌套结构
-            if isinstance(val, dict) and 'matrix_aligned' in val:
-                return val['matrix_aligned']
+            if isinstance(val, dict) and "matrix_aligned" in val:
+                expr_df = val["matrix_aligned"]
+                break
             elif isinstance(val, pd.DataFrame):
-                return val
-        raise KeyError("No expression matrix found in _meta_matrix_pack")
+                expr_df = val
+                break
+
+        if expr_df is None:
+            raise KeyError("No expression matrix found in _meta_matrix_pack")
+
+        return self._ensure_gene_labels(expr_df)
+
+    def _ensure_gene_labels(self, expr_df: pd.DataFrame) -> pd.DataFrame:
+        """确保表达矩阵具有可读的基因符号索引或 SYMBOL 列
+
+        若索引为 Ensembl ID 且无基因标注列，通过 mygene 映射添加 SYMBOL
+        列并缓存结果至 _meta_matrix_pack['expr_matrix']。
+        """
+        for col in ('SYMBOL', 'GENE', 'GENENAME'):
+            if col in expr_df.columns:
+                return expr_df
+
+        idx_sample = expr_df.index.astype(str)
+        if idx_sample.str.match(r'^ENS[A-Z]*G\d+').mean() < 0.5:
+            return expr_df
+
+        from modules.calculater import map_ensembl_to_symbol
+        self._logger.info("表达矩阵索引为 Ensembl ID，通过 mygene 映射添加基因符号...")
+        expr_df = map_ensembl_to_symbol(expr_df)
+        self._meta_matrix_pack["expr_matrix"] = expr_df
+        return expr_df
 
     def _normalize_genes_to_convention(self, genes: list) -> list:
         """将基因列表中的每个基因规范化为表达矩阵的命名规则（首字母大写或全大写）。"""
@@ -348,7 +424,24 @@ class FigurePlotter(ABC):
             return genes
         if expr_df is None or expr_df.empty:
             return genes
-        convention = detect_gene_case_convention(expr_df.index)
+
+        # 优先使用 SYMBOL 列检测命名规则（Ensembl 索引无法反映基因符号规范）
+        index_for_detection = expr_df.index
+        for col in ('SYMBOL', 'GENE', 'GENENAME'):
+            if col in expr_df.columns:
+                symbols = expr_df[col].dropna().astype(str).str.strip()
+                symbols = symbols[symbols.str.fullmatch(r'[A-Za-z][A-Za-z0-9]+')]
+                if len(symbols) > 10:
+                    index_for_detection = pd.Index(symbols)
+                    break
+
+        # Ensembl 索引回退到 pack 自动检测或 organism 配置
+        idx_sample = expr_df.index.astype(str)
+        if idx_sample.str.match(r'^ENS[A-Z]*G\d+').mean() >= 0.5:
+            organism = getattr(self.cfg, 'organism', 'human')
+            convention = 'mouse' if organism.lower() == 'mouse' else 'human'
+        else:
+            convention = detect_gene_case_convention(index_for_detection)
         return [normalize_gene_symbol(g, convention) for g in genes]
 
     def volcano_plotter(self) -> None:
@@ -435,7 +528,9 @@ class FigurePlotter(ABC):
 
         full_meta = self._meta_matrix_pack.get('meta_full')
         if full_meta is not None:
-            expr_df = self._rename_expr_columns_by_meta_order(expr_df, full_meta)
+            expr_df, _renamed = self._rename_expr_columns_by_meta_order(expr_df, full_meta)
+            if not _renamed:
+                self._logger.warning("热图：表达矩阵列名未能对齐为 GSM ID，样本标注可能不准确")
 
         top_n = getattr(self.cfg, "heatmap_top_n_genes", 20)
         top_genes = data.sort_values('padj').head(top_n)['Gene'].tolist()
@@ -545,24 +640,9 @@ class FigurePlotter(ABC):
                     f.write(content)
                 self._logger.info("热图绘制完成（聚类 + 分组注释）")
 
-    def _rename_expr_columns_by_meta_order(self, expr_df: pd.DataFrame, full_meta: pd.DataFrame) -> pd.DataFrame:
-        """尝试通过元数据顺序将表达矩阵的样本列映射为 GSM 样本名"""
-        sample_columns = self._get_sample_columns(expr_df)
-        if len(sample_columns) == len(full_meta.index):
-            rename_map = {old: new for old, new in zip(sample_columns, full_meta.index.astype(str))}
-            return expr_df.rename(columns=rename_map)
-
-        for meta_col in ['geo_accession', 'title', 'source_name_ch1', 'label_ch1']:
-            if meta_col not in full_meta.columns:
-                continue
-            col_values = full_meta[meta_col].astype(str).tolist()
-            if set(sample_columns).issubset(set(col_values)):
-                rename_map = {
-                    sample_col: str(full_meta.index[col_values.index(sample_col)])
-                    for sample_col in sample_columns
-                }
-                return expr_df.rename(columns=rename_map)
-        return expr_df
+    def _rename_expr_columns_by_meta_order(self, expr_df: pd.DataFrame, full_meta: pd.DataFrame):
+        from modules.calculater import rename_expr_columns_by_meta_order
+        return rename_expr_columns_by_meta_order(expr_df, full_meta)
 
     def _set_expression_index_by_gene_label(self, expr_df: pd.DataFrame) -> pd.DataFrame:
         """如果表达矩阵行索引不是基因名，则使用注释列设置基因索引"""
@@ -601,53 +681,9 @@ class FigurePlotter(ABC):
 
         return expr_df.loc[expr_df.index.isin(top_genes)]
 
-    def _infer_group_labels_from_sample_names(self, sample_names: pd.Index, exp_type: str = 'Fibrosis') -> pd.Series:
-        """从表达矩阵列名推断组标签
-        
-        Args:
-            sample_names: 表达矩阵的列索引，通常是样本名
-            exp_type: 实验组的标签前缀，默认为'Fibrosis'
-        
-        Returns:
-            pd.Series: 包含组标签的Series，索引与输入的sample_names相同
-        
-        Assumes:
-            - Control组样本名以'N'开头（如N1, N2, ...）
-            - 实验组样本名以'D'开头（如D1, D2, ...）
-        """
-        if self.cfg.exp_type:
-            exp_type = self.cfg.exp_type
-        labels = []
-        for name in sample_names:
-            if not isinstance(name, str) or len(name) < 2:
-                labels.append(None)
-                continue
-            prefix = name[1].upper()
-            if prefix == 'N':
-                labels.append('Control')
-            elif prefix == 'D':
-                labels.append(exp_type)
-            else:
-                labels.append(None)
-        return pd.Series(labels, index=sample_names)
-
     def _get_sample_columns(self, df: pd.DataFrame) -> list:
-        """识别表达矩阵中的样本列，排除注释列和检测 p-value 列"""
-        sample_columns = []
-        for col in df.columns:
-            if isinstance(col, str):
-                lowered = col.lower()
-                if any(keyword in lowered for keyword in [
-                    'ensembl', 'entrezid', 'symbol', 'genename', 'probeid',
-                    'id_ref', 'targetid', 'gene', 'description'
-                ]):
-                    continue
-                if 'detection' in lowered and 'pval' in lowered:
-                    continue
-                sample_columns.append(col)
-            else:
-                sample_columns.append(col)
-        return sample_columns
+        from modules.calculater import get_sample_columns
+        return get_sample_columns(df)
 
     def _prepare_diff_data(self, exp_type: str = 'Fibrosis', gene: str = None) -> dict:
         """准备差异分析的箱线图数据"""
@@ -663,22 +699,19 @@ class FigurePlotter(ABC):
         # 提取基因表达向量
         y = fetch_gene_vector(expr_df, tar_gene=gene)
 
-        # 分组标签
+        # 分组标签：只取表达矩阵列名与 meta 索引的交集，跳过无分组信息的样本
         group_col = 'group' if 'group' in meta.columns else 'group_label'
-        x = None
-        try:
-            x = meta.loc[y.index, group_col]
-        except KeyError:
-            self._logger.warning("样本名与元数据索引不匹配，尝试按原始元数据顺序映射组标签")
-            full_meta = self._meta_matrix_pack.get('meta_full')
-            sample_columns = self._get_sample_columns(expr_df)
-
-            if full_meta is not None and len(sample_columns) == len(full_meta.index):
-                rename_map = {old: new for old, new in zip(sample_columns, full_meta.index.astype(str))}
-                y = y.rename(index=rename_map)
-                x = meta.reindex(y.index)[group_col]
-            else:
-                x = self._infer_group_labels_from_sample_names(y.index)
+        common_samples = y.index[y.index.isin(meta.index)]
+        n_skipped = len(y.index) - len(common_samples)
+        if n_skipped > 0:
+            self._logger.warning(
+                f"{n_skipped} 个样本不在 meta 索引中（无分组信息），已跳过"
+            )
+        if len(common_samples) == 0:
+            self._logger.warning("表达矩阵列名与 meta 索引无交集，无法绘制箱线图")
+            return None
+        y = y.loc[common_samples]
+        x = meta.loc[common_samples, group_col]
 
         # 过滤缺失值
         valid = x.notna() & y.notna()
@@ -1508,6 +1541,7 @@ class DataPlotter(FigurePlotter):
         super().__init__(cfg)
         self.gene_corr_table: Optional[pd.DataFrame] = data.gene_corr_table
         self.gene_diff_table: Optional[pd.DataFrame] = data.gene_diff_table
+        self.gene_hilo_table: Optional[pd.DataFrame] = data.gene_hilo_table
         self.gene_enrich_table: Optional[pd.DataFrame] = data.gene_enrich_table
         self.gene_immune_table: Optional[pd.DataFrame] = data.gene_immune_table
         self.meta_matrix_pack: dict = data.meta_matrix_pack
@@ -1522,21 +1556,15 @@ class DataPlotter(FigurePlotter):
         self.figplotter()
 
     def _load_data(self):
-        if self.cfg.analysis_mode == "corr":
-            if self.gene_corr_table is not None and not self.gene_corr_table.empty:
-                self._gene_corr_table = self.gene_corr_table
-        elif self.cfg.analysis_mode == "diff":
-            if self.gene_diff_table is not None and not self.gene_diff_table.empty:
-                self._gene_diff_table = self.gene_diff_table
-        elif self.cfg.analysis_mode == "enrich":
-            if self.gene_enrich_table is not None and not self.gene_enrich_table.empty:
-                self._gene_enrich_table = self.gene_enrich_table
-        elif self.cfg.analysis_mode == "immune":
-            if self.gene_immune_table is not None and not self.gene_immune_table.empty:
-                self._gene_immune_table = self.gene_immune_table
-        else:
+        meta = self._MODE_META.get(self.cfg.analysis_mode)
+        if meta is None:
             self._logger.error(f"未知分析模式：{self.cfg.analysis_mode}，无法加载数据")
             raise ValueError(f"未知分析模式：{self.cfg.analysis_mode}")
+
+        attr_name = meta["attr"]
+        data_source = getattr(self, attr_name, None)
+        if data_source is not None and not data_source.empty:
+            setattr(self, meta["internal_attr"], data_source)
 
         if self.meta_matrix_pack:
             self._meta_matrix_pack = self.meta_matrix_pack
@@ -1550,50 +1578,42 @@ class FilePlotter(FigurePlotter):
     def fig_plotter(self):
         """筛选所需目标并画图"""
         self._logger.info("从pkl中读取索引和数据中...")
-        need_load = (
-            self.cfg.analysis_mode in ("corr", "diff", "hilo")
-            and (not self._gene_corr_table or not self._meta_matrix_pack)
-        )
-        if need_load or (
-            self.cfg.analysis_mode in ("enrich", "immune")
-            and (not self._gene_enrich_table if self.cfg.analysis_mode == "enrich"
-                 else not self._gene_immune_table)
-        ):
+        meta = self._MODE_META.get(self.cfg.analysis_mode)
+        need_load = False
+        if meta and meta["needs_pack"]:
+            curr_table = getattr(self, meta["internal_attr"], None)
+            need_load = curr_table is None or self._meta_matrix_pack is None
+        elif meta:
+            curr_table = getattr(self, meta["internal_attr"], None)
+            need_load = curr_table is None
+        if need_load:
             self._load_data()
         self._logger.info("索引和数据读取成功！")
         self.figplotter()
 
     def _load_data(self):
         """从文件中加载数据"""
-        # 读取配置
         data_dir, gse_id = os.path.join(self.cfg.data_dir, self.cfg.gse_id), self.cfg.gse_id
+        meta = self._MODE_META.get(self.cfg.analysis_mode)
 
-        # 执行加载
-        summary_name = {
-            "corr": f"{gse_id}_correlation_summary.pkl",
-            "diff": f"{gse_id}_differential_summary.pkl",
-            "hilo": f"{gse_id}_highlow_summary.pkl",
-            "enrich": f"{gse_id}_enrichment_summary.pkl",
-            "immune": f"{gse_id}_immune_summary.pkl",
-        }.get(self.cfg.analysis_mode)
-
-        if summary_name is None:
+        if meta is None:
             self._logger.error(f"未知分析模式：{self.cfg.analysis_mode}，无法加载数据")
             raise ValueError(f"未知分析模式：{self.cfg.analysis_mode}")
 
+        summary_name = f"{gse_id}_{meta['summary_suffix']}.pkl"
         summary_path = os.path.join(data_dir, "pkl", summary_name)
-        data_pack_path = DataPacker.resolve_pack_path(data_dir, gse_id, self.cfg.analysis_mode)
-
-        if self.cfg.analysis_mode == "corr":
-            self._gene_corr_table = pd.read_pickle(summary_path)
-        elif self.cfg.analysis_mode == "enrich":
-            self._gene_enrich_table = pd.read_pickle(summary_path)
+        if not os.path.exists(summary_path):
+            self._logger.warning(f"摘要文件不存在: {summary_path}，请先运行分析")
+            setattr(self, meta["internal_attr"], None)
             return
-        elif self.cfg.analysis_mode == "immune":
-            self._gene_immune_table = pd.read_pickle(summary_path)
-        else:
-            self._gene_diff_table = pd.read_pickle(summary_path)
 
+        # 使用 internal_attr 反射设置内部属性，避免 if/elif 链
+        setattr(self, meta["internal_attr"], pd.read_pickle(summary_path))
+
+        if self.cfg.analysis_mode == "enrich":
+            return
+
+        data_pack_path = DataPacker.resolve_pack_path(data_dir, gse_id, self.cfg.analysis_mode)
         self._meta_matrix_pack = pd.read_pickle(data_pack_path)
 
 

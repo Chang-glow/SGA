@@ -6,10 +6,8 @@ import pandas as pd
 from typing import Optional
 from statsmodels.stats.multitest import fdrcorrection
 
-_PROBE_RE = re.compile(
-    r"^(ILMN_|AFFY-|A_\d|CUST_|GI_|NM_|NR_|XM_|XR_"
-    r"|TC\d|Hs\.|Mm\.|Rn\.|DDB_|ENS|FBgn_|agc_|GE_)"
-)
+from modules.calculater import _PROBE_RE
+
 # 非编码 RNA + 假基因过滤规则
 _NON_CODING_RES = [
     re.compile(r"^MIR", re.IGNORECASE),                # miRNA (含 MIRLET 家族)
@@ -61,13 +59,10 @@ class DiffStrategy:
             self._logger.error("未找到分组信息，无法进行差异分析")
             raise ValueError("未找到分组信息，无法进行差异分析")
 
-        expr_keys = [k for k, v in pack.items() if k not in {"meta", "meta_full", "group_info"}]
+        _NON_EXPR_KEYS = {"meta", "meta_full", "group_info", "_batch_exp_groups", "expr_matrix", "_organism", "_ensembl_to_symbol"}
+        expr_keys = [k for k, v in pack.items() if k not in _NON_EXPR_KEYS]
         if not expr_keys:
             raise KeyError("No expression matrix found in data pack")
-
-        expr_df = pack[expr_keys[0]]
-        if isinstance(expr_df, dict) and 'matrix_aligned' in expr_df:
-            expr_df = expr_df['matrix_aligned']
 
         exp_type = self.cfg.exp_type if self.cfg.exp_type else 'Experiment'
         control_samples = meta[meta['group'] == 'Control'].index.tolist()
@@ -76,19 +71,37 @@ class DiffStrategy:
             self._logger.error(f"分组信息不完整,无法找到Control或{exp_type}组的样本")
             raise ValueError(f"分组信息不完整,无法找到Control或{exp_type}组的样本")
 
-        expr_df = self._align_expression_matrix(expr_df, control_samples + exp_samples, pack)
-        expr_df = self._prefilter_expression_matrix(expr_df)
+        meta_full = pack.get('meta_full')
+        is_superseries = any('/' in k for k in expr_keys)
+
+        if is_superseries and meta_full is not None and 'series_id' in meta_full.columns:
+            expr_df = self._align_superseries_matrices(expr_keys, pack, meta_full)
+        else:
+            expr_df = pack[expr_keys[0]]
+            if isinstance(expr_df, dict) and 'matrix_aligned' in expr_df:
+                expr_df = expr_df['matrix_aligned']
+            expr_df = self._align_expression_matrix(expr_df, control_samples + exp_samples, pack)
+            expr_df = self._prefilter_expression_matrix(expr_df)
+
+        # 过滤到表达矩阵中实际存在的样本
+        control_samples = [s for s in control_samples if s in expr_df.columns]
+        exp_samples = [s for s in exp_samples if s in expr_df.columns]
+        if not control_samples or not exp_samples:
+            self._logger.error("表达矩阵中未找到Control或Experiment组样本")
+            raise ValueError("表达矩阵中未找到Control或Experiment组样本")
+
         return self._calculate_diff(expr_df, control_samples, exp_samples)
 
-    def _align_expression_matrix(self, expr_df: pd.DataFrame, common_samples: list, pack: dict) -> pd.DataFrame:
+    def _align_expression_matrix(self, expr_df: pd.DataFrame, common_samples: list, pack: dict, meta_full_override=None) -> pd.DataFrame:
         if set(common_samples).issubset(expr_df.index):
             expr_df = expr_df.T
 
         missing_samples = [s for s in common_samples if s not in expr_df.columns]
         if missing_samples:
             self._logger.warning(f"样本名未在表达矩阵列中找到: {missing_samples[:10]}{'...' if len(missing_samples) > 10 else ''}")
-            if 'meta_full' in pack:
-                expr_df = self.analyzer._rename_expr_columns_by_meta_order(expr_df, pack['meta_full'])
+            effective_meta = meta_full_override if meta_full_override is not None else pack.get('meta_full')
+            if effective_meta is not None:
+                expr_df, _renamed = self.analyzer._rename_expr_columns_by_meta_order(expr_df, effective_meta)
                 missing_samples = [s for s in common_samples if s not in expr_df.columns]
                 if not missing_samples:
                     sample_columns = [c for c in common_samples if c in expr_df.columns]
@@ -106,6 +119,71 @@ class DiffStrategy:
             other_columns = [c for c in expr_df.columns if c not in sample_columns]
             expr_df = expr_df.loc[:, other_columns + sample_columns]
         return expr_df
+
+    def _align_superseries_matrices(self, expr_keys: list, pack: dict, meta_full: pd.DataFrame) -> pd.DataFrame:
+        """SuperSeries: 使用 pack 中预合并的表达矩阵（DataPacker 构建时已完成合并和基因符号映射）"""
+        if "expr_matrix" in pack:
+            expr_df = pack["expr_matrix"]
+            if isinstance(expr_df, dict) and "matrix_aligned" in expr_df:
+                expr_df = expr_df["matrix_aligned"]
+            # pack 构建时已完成列名对齐，仅保留实际存在的样本列
+            sample_cols = [c for c in meta_full.index if c in expr_df.columns]
+            if not sample_cols:
+                raise KeyError("预合并矩阵中无样本列与 meta_full 匹配")
+            anno_cols = [c for c in expr_df.columns if c not in meta_full.index]
+            expr_df = expr_df[anno_cols + sample_cols]
+            expr_df = self._prefilter_expression_matrix(expr_df)
+            self._logger.info(
+                f"使用预合并矩阵: {expr_df.shape[0]} 基因 × {expr_df.shape[1]} 样本"
+            )
+            return expr_df
+
+        # 回退：按子系列分别对齐再合并（兼容旧 pack）
+        aligned_parts = []
+        for key in expr_keys:
+            expr_df = pack[key]
+            if isinstance(expr_df, dict) and 'matrix_aligned' in expr_df:
+                expr_df = expr_df['matrix_aligned']
+
+            sub_series_id = key.split('/')[0]
+            sub_meta = meta_full[meta_full['series_id'].str.contains(sub_series_id, na=False)]
+            if sub_meta.empty:
+                self._logger.warning(f"未找到子系列 {sub_series_id} 的元数据样本，跳过")
+                continue
+
+            expr_df = self._align_expression_matrix(
+                expr_df, sub_meta.index.tolist(), pack, meta_full_override=sub_meta
+            )
+            expr_df = self._prefilter_expression_matrix(expr_df)
+            expr_df = self._set_gene_index(expr_df)
+            expr_df = self._normalize_gene_index(expr_df)
+            aligned_parts.append(expr_df)
+
+        if not aligned_parts:
+            raise KeyError("所有子系列表达矩阵对齐均失败")
+
+        if len(aligned_parts) == 1:
+            return aligned_parts[0]
+
+        merged = pd.concat(aligned_parts, axis=1, join='inner')
+        self._logger.info(
+            f"合并 {len(aligned_parts)} 个子系列矩阵: "
+            f"{merged.shape[0]} 基因 × {merged.shape[1]} 样本"
+        )
+        return merged
+
+    def _set_gene_index(self, expr_df: pd.DataFrame) -> pd.DataFrame:
+        """将 DataFrame 索引设为基因符号列，丢弃注释列仅保留样本列"""
+        for col in ['SYMBOL', 'GENE', 'GENENAME']:
+            if col in expr_df.columns:
+                sample_cols = self.analyzer._get_sample_columns(expr_df)
+                expr_df = expr_df[[col] + sample_cols].set_index(col)
+                return expr_df
+        return expr_df
+
+    def _normalize_gene_index(self, expr_df: pd.DataFrame) -> pd.DataFrame:
+        from modules.calculater import normalize_gene_index
+        return normalize_gene_index(expr_df)
 
     def _prefilter_expression_matrix(self, expr_df: pd.DataFrame) -> pd.DataFrame:
         """剔除探针行并按基因符号去重（保留表达量最高的行），减少假阳性"""
@@ -199,15 +277,18 @@ class DiffStrategy:
         return result
 
     def _read_cached_summary(self, path: str) -> Optional[pd.DataFrame]:
-        if os.path.exists(path) and not self.cfg.debug:
+        if os.path.exists(path) and not self.cfg.force:
             df = pd.read_pickle(path)
             if self._summary_has_valid_genes(df):
                 self._logger.info(f"发现现存分析结果：{path}，跳过差异分析")
                 return df
             self._logger.warning(
-                f"现存差异分析结果 {path} 中的 Gene 列似乎为数字索引，将重新计算以获取真实基因标签"
+                f"现存差异分析结果 {path} 中的 Gene 列为无效标识"
+                f"（数字索引或 Ensembl ID），将重新计算以获取真实基因标签"
             )
         return None
+
+    _ENSEMBL_RE = re.compile(r'^ENS[A-Z]*G\d+')
 
     def _summary_has_valid_genes(self, df: pd.DataFrame) -> bool:
         if 'Gene' not in df.columns:
@@ -216,6 +297,9 @@ class DiffStrategy:
         if genes.empty:
             return False
         if genes.str.fullmatch(r'\d+').all():
+            return False
+        n_ensembl = genes.str.match(self._ENSEMBL_RE).sum()
+        if n_ensembl > len(genes) * 0.5:
             return False
         return True
 

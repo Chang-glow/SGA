@@ -12,10 +12,8 @@ from utils import RESULT_DIR, parse_tar_genes
 NO_GEO_MODES.add("enrich")
 
 
-_PROBE_PREFIXES = (
-    "ILMN_", "AFFY-", "A_", "CUST_", "GE_", "TC0", "TC1",
-    "Hs.", "Mm.", "Rn.", "DDB_", "ENS", "FBgn_",
-)
+from modules.calculater import _PROBE_RE
+
 _MIN_GENES_FALLBACK_DEFAULT = 10
 
 
@@ -213,11 +211,44 @@ class EnrichStrategy:
     def _read_source_results(self, csv_path: str, pkl_path: str) -> Optional[pd.DataFrame]:
         if os.path.exists(pkl_path):
             self._logger.info(f"从 PKL 读取源结果: {pkl_path}")
-            return pd.read_pickle(pkl_path)
+            df = pd.read_pickle(pkl_path)
         elif os.path.exists(csv_path):
             self._logger.info(f"从 CSV 读取源结果: {csv_path}")
-            return pd.read_csv(csv_path)
-        return None
+            df = pd.read_csv(csv_path)
+        else:
+            return None
+        return self._ensure_gene_symbols(df)
+
+    def _ensure_gene_symbols(self, df: pd.DataFrame) -> pd.DataFrame:
+        """检测 Gene 列是否为 Ensembl ID，若是则用 pack 中的 SYMBOL 映射转换。"""
+        import re
+        if "Gene" not in df.columns or df.empty:
+            return df
+        genes = df["Gene"].dropna().astype(str).str.strip()
+        ensembl_re = re.compile(r'^ENS[A-Z]*G\d+')
+        n_ensembl = genes.str.match(ensembl_re).sum()
+        if n_ensembl < len(genes) * 0.5:
+            return df
+        pack = self.analyzer._meta_matrix_pack
+        if pack is None:
+            self._logger.warning("Gene 列以 Ensembl ID 为主，但 pack 未加载，无法转换。")
+            return df
+
+        # 优先使用 pack 中预存的 _ensembl_to_symbol 映射（data_packer 构建时生成）
+        ensembl_to_symbol = pack.get("_ensembl_to_symbol")
+        if ensembl_to_symbol is None:
+            # 回退：从 expr_matrix 的 SYMBOL 列提取映射（旧行为，向后兼容）
+            expr_matrix = pack.get("expr_matrix")
+            if expr_matrix is not None and "SYMBOL" in expr_matrix.columns:
+                ensembl_to_symbol = expr_matrix["SYMBOL"].dropna().to_dict()
+        if ensembl_to_symbol is None:
+            return df
+        df = df.copy()
+        original = df["Gene"].copy()
+        df["Gene"] = df["Gene"].map(lambda g: ensembl_to_symbol.get(str(g), g))
+        converted = (original != df["Gene"]).sum()
+        self._logger.info(f"Ensembl ID -> 基因符号: 转换 {converted}/{len(df)} 个")
+        return df
 
     def _filter_significant_genes(self, df: pd.DataFrame) -> List[str]:
         p_thr = self.cfg.p_threshold
@@ -240,8 +271,7 @@ class EnrichStrategy:
         df = df[~df["Gene"].str.fullmatch(r"\d+")]
 
         # 过滤探针 ID
-        pattern = "^(?:" + "|".join(_PROBE_PREFIXES) + ")"
-        df = df[~df["Gene"].str.match(pattern)]
+        df = df[~df["Gene"].str.match(_PROBE_RE)]
 
         cleaned_count = original_count - len(df)
         if cleaned_count:

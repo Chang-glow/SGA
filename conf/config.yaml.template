@@ -37,6 +37,15 @@ tar_tuple: ""
 # ── 相关性分析 ──
 # 自定义标志物基因集。留空 {} 则使用内置肝纤维化 hfm_dict
 custom_marker_dict: {}
+# 人↔小鼠同源基因符号映射，用于跨物种标志物匹配
+homolog_map:
+  TNFA: Tnf
+  TNF: Tnf
+  TEM1: Cd248
+  ACC1: Acaca
+  FASL: Fasl
+  AXL: Axl
+  AX1: Axl
 
 # ── 富集分析 ──
 enrichment_source_mode: diff

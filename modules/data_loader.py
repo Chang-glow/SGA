@@ -117,7 +117,7 @@ class DataLoader:
         sys.stdout.flush()
 
     def _get_gse(self) -> GEOparse.GEOTypes.GSE:
-        """获取 GEO 数据包。"""
+        """获取 GEO 数据包。
 
         Returns:
             gse: 下载的数据包
@@ -186,6 +186,18 @@ class DataLoader:
                 soft_result = self._extract_expression_from_soft(gse)
                 if soft_result is not None:
                     return soft_result
+                # 检测 SuperSeries，回退下载子系列矩阵
+                sub_series = _detect_superseries(gse)
+                if sub_series:
+                    DataLoader._logger.info(
+                        f"检测到 SuperSeries，回退下载 {len(sub_series)} 个子系列: {sub_series}"
+                    )
+                    merged = self._download_superseries_subs(sub_series)
+                    if merged:
+                        return merged
+                    raise FileNotFoundError(
+                        f"SuperSeries 所有子系列均无可用 matrix/count/txt 文件: {sub_series}"
+                    )
                 raise FileNotFoundError("未发现补充文件且 SOFT 文件中也没有表达数据")
 
             selected_idx = None
@@ -328,6 +340,34 @@ class DataLoader:
             DataLoader._logger.error(f"从 SOFT 提取表达矩阵失败: {e}")
             return None
 
+    def _download_superseries_subs(self, sub_ids: list) -> dict:
+        """对每个子系列下载 matrix/count/txt 文件，返回合并的 {key: filepath}。"""
+        merged = {}
+        for sub_id in sub_ids:
+            try:
+                sub_gse = GEOparse.get_GEO(
+                    geo=sub_id,
+                    destdir=os.path.join(self.cfg.data_dir, sub_id),
+                    silent=True,
+                )
+            except Exception:
+                DataLoader._logger.warning(f"子系列 {sub_id} 获取失败，跳过")
+                continue
+            for url in sub_gse.metadata.get("supplementary_file", []):
+                basename = os.path.basename(url)
+                if not (
+                    ".matrix" in basename.lower()
+                    or ".count" in basename.lower()
+                    or ".txt" in basename.lower()
+                ):
+                    continue
+                if "readme" in basename.lower():
+                    continue
+                filepath = self.download_geo_data(url)
+                if filepath:
+                    merged[f"{sub_id}/{basename}"] = filepath
+        return merged
+
     def _save_matrix_memory(self, candidates: list, selected_idx: list) -> None:
         """保存矩阵选择到记忆文件（与分组记忆共用同一文件）"""
         memory_path = os.path.join(CONFIG_DIR, "group_memory.yaml")
@@ -365,6 +405,20 @@ class DataLoader:
                 )
                 return None
         return indices if indices else None
+
+
+def _detect_superseries(gse) -> list:
+    """检测 SuperSeries，返回子系列 GSE ID 列表，非 SuperSeries 返回空列表。"""
+    summary = gse.metadata.get("summary", [""])[0]
+    if "Superseries" not in summary and "SubSeries" not in summary:
+        return []
+    sub_ids = []
+    for rel in gse.metadata.get("relation", []):
+        if "SuperSeries of:" in rel:
+            gse_id = rel.split("SuperSeries of:")[-1].strip()
+            if gse_id:
+                sub_ids.append(gse_id)
+    return sub_ids
 
 
 if __name__ == "__main__":

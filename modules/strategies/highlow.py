@@ -42,17 +42,31 @@ class HighLowStrategy:
             self._logger.error("hilo 分组信息不完整，缺失 Low 或 High 样本")
             raise ValueError("hilo 分组信息不完整，缺失 Low 或 High 样本")
 
-        expr_keys = [k for k in pack.keys() if k not in {"meta", "meta_full", "group_info"}]
+        _NON_EXPR_KEYS = {"meta", "meta_full", "group_info", "_batch_exp_groups", "expr_matrix"}
+        expr_keys = [k for k in pack.keys() if k not in _NON_EXPR_KEYS]
         if not expr_keys:
             raise KeyError("No expression matrix found in data pack")
 
-        expr_df = pack[expr_keys[0]]
-        if isinstance(expr_df, dict) and "matrix_aligned" in expr_df:
-            expr_df = expr_df["matrix_aligned"]
+        meta_full = pack.get('meta_full')
+        is_superseries = any('/' in k for k in expr_keys)
 
-        diff_strategy = DiffStrategy(self.analyzer)
-        expr_df = diff_strategy._align_expression_matrix(expr_df, low_samples + high_samples, pack)
-        expr_df = diff_strategy._prefilter_expression_matrix(expr_df)
+        if is_superseries and meta_full is not None and 'series_id' in meta_full.columns:
+            expr_df = diff_strategy._align_superseries_matrices(expr_keys, pack, meta_full)
+        else:
+            expr_df = pack[expr_keys[0]]
+            if isinstance(expr_df, dict) and "matrix_aligned" in expr_df:
+                expr_df = expr_df["matrix_aligned"]
+            expr_df = diff_strategy._align_expression_matrix(expr_df, low_samples + high_samples, pack)
+            expr_df = diff_strategy._prefilter_expression_matrix(expr_df)
+
+        low_samples = [s for s in low_samples if s in expr_df.columns]
+        high_samples = [s for s in high_samples if s in expr_df.columns]
+        if not low_samples or not high_samples:
+            self._logger.error("表达矩阵中未找到 Low 或 High 组样本")
+            raise ValueError("表达矩阵中未找到 Low 或 High 组样本")
+
         result = diff_strategy._calculate_diff(expr_df, low_samples, high_samples)
+
+        return result
 
         return result

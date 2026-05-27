@@ -14,8 +14,62 @@ from modules.data_packer import DataPacker
 
 _PROBE_RE = re.compile(
     r"^(ILMN_|AFFY-|A_\d|CUST_|GI_|NM_|NR_|XM_|XR_"
-    r"|TC\d|Hs\.|Mm\.|Rn\.|DDB_|ENS|FBgn_|agc_|GE_)"
+    r"|TC\d|Hs\.|Mm\.|Rn\.|DDB_|ENS[A-Z]*[EPT]|FBgn_|agc_|GE_)"
 )
+
+_SAMPLE_COL_EXCLUDE_KEYWORDS = [
+    'ensembl', 'entrezid', 'symbol', 'genename', 'probeid',
+    'id_ref', 'targetid', 'gene', 'description',
+]
+
+
+def get_sample_columns(df: pd.DataFrame) -> list:
+    """识别表达矩阵中的样本列，排除注释列和检测 p-value 列"""
+    sample_columns = []
+    for col in df.columns:
+        if isinstance(col, str):
+            lowered = col.lower()
+            if any(kw in lowered for kw in _SAMPLE_COL_EXCLUDE_KEYWORDS):
+                continue
+            if 'detection' in lowered and 'pval' in lowered:
+                continue
+            sample_columns.append(col)
+        else:
+            sample_columns.append(col)
+    return sample_columns
+
+
+def rename_expr_columns_by_meta_order(expr_df: pd.DataFrame, full_meta: pd.DataFrame,
+                                       warn_on_fail: bool = True) -> tuple:
+    """将表达矩阵列名映射为 GSM 样本名。优先按位置匹配，其次按元数据字段值匹配。
+
+    Returns:
+        (expr_df, True)  — 重命名成功
+        (expr_df, False) — 重命名失败（列名未变），已 emit warning（若 warn_on_fail=True）
+    """
+    sample_columns = get_sample_columns(expr_df)
+    if len(sample_columns) == len(full_meta.index):
+        rename_map = {old: new for old, new in zip(sample_columns, full_meta.index.astype(str))}
+        return expr_df.rename(columns=rename_map), True
+
+    for meta_col in ['geo_accession', 'title', 'source_name_ch1', 'label_ch1']:
+        if meta_col not in full_meta.columns:
+            continue
+        col_values = full_meta[meta_col].astype(str).tolist()
+        if set(sample_columns).issubset(set(col_values)):
+            rename_map = {
+                sample_col: str(full_meta.index[col_values.index(sample_col)])
+                for sample_col in sample_columns
+            }
+            return expr_df.rename(columns=rename_map), True
+    if warn_on_fail:
+        import logging
+        logging.warning(
+            f"表达矩阵列名未能对齐为 GSM ID：样本列数({len(sample_columns)}) "
+            f"!= meta 行数({len(full_meta.index)})，"
+            f"且样本列名与 meta 各字段值均不匹配，列名保持不变"
+        )
+    return expr_df, False
 _NON_CODING_RES = [
     re.compile(r"^MIR", re.IGNORECASE),
     re.compile(r"^SNOR[A-Z]\d", re.IGNORECASE),
@@ -200,10 +254,39 @@ def normalize_gene_symbol(gene: str, convention: str) -> str:
     return gene
 
 
+def resolve_gene_in_matrix(gene: str, matrix_index: pd.Index, convention: str,
+                           homolog_map: dict | None = None) -> str:
+    """在表达矩阵中查找基因的最佳匹配，返回矩阵中实际存在的基因名。
+
+    依次尝试：原始名 → 规范化名 → 同源映射（来自 cfg.homolog_map）。均不匹配返回空字符串。
+    """
+    idx_set = {str(i) for i in matrix_index}
+    # 1. 原始名
+    if gene in idx_set:
+        return gene
+    # 2. 规范化名
+    normalized = normalize_gene_symbol(gene, convention)
+    if normalized != gene and normalized in idx_set:
+        return normalized
+    # 3. 同源映射（cfg.homolog_map: {human: mouse} or {mouse: human}）
+    if homolog_map:
+        # 查找: gene → mapped
+        mapped = homolog_map.get(gene) or homolog_map.get(gene.upper()) or homolog_map.get(
+            gene[0].upper() + gene[1:].lower() if gene else "")
+        if mapped and mapped in idx_set:
+            return mapped
+        # 反向查找: mapped → gene
+        reverse = {v: k for k, v in homolog_map.items()}
+        rev_mapped = reverse.get(gene) or reverse.get(gene.upper()) or reverse.get(
+            gene[0].upper() + gene[1:].lower() if gene else "")
+        if rev_mapped and rev_mapped in idx_set:
+            return rev_mapped
+    return ""
+
+
 def normalize_tar_gene_from_pack(cfg, meta_matrix_pack: dict) -> None:
     """从 pack 中提取表达矩阵，检测基因命名规则，原地修改 cfg.tar_gene。
 
-    仅在内存中修改，不写回配置文件。
     跳过 enrich 模式（无表达矩阵）或无 tar_gene 的情况。
     """
     import logging
@@ -229,7 +312,32 @@ def normalize_tar_gene_from_pack(cfg, meta_matrix_pack: dict) -> None:
     if expr_df is None or expr_df.empty:
         return
 
-    convention = detect_gene_case_convention(expr_df.index)
+    # 优先使用 SYMBOL 列检测命名规则（Ensembl 索引无法反映基因符号规范）
+    index_for_detection = expr_df.index
+    for col in ('SYMBOL', 'GENE', 'GENENAME'):
+        if col in expr_df.columns:
+            symbols = expr_df[col].dropna().astype(str).str.strip()
+            symbols = symbols[symbols.str.fullmatch(r'[A-Za-z][A-Za-z0-9]+')]
+            if len(symbols) > 10:
+                index_for_detection = pd.Index(symbols)
+                break
+
+    # 若矩阵索引无法反映命名规则（如 Ensembl ID），回退到 pack 自动检测或 organism 配置
+    idx_sample = expr_df.index.astype(str)
+    if idx_sample.str.match(r'^ENS[A-Z]*G\d+').mean() >= 0.5:
+        organism = meta_matrix_pack.get('_organism')
+        if not organism:
+            meta_full = meta_matrix_pack.get('meta_full')
+            if meta_full is not None:
+                from modules.data_packer import DataPacker
+                organism = DataPacker._detect_organism(meta_full)
+        if not organism:
+            organism = getattr(cfg, 'organism', 'human')
+        cfg.organism = organism
+        convention = 'mouse' if organism.lower() == 'mouse' else 'human'
+    else:
+        convention = detect_gene_case_convention(index_for_detection)
+
     new_gene = normalize_gene_symbol(cfg.tar_gene, convention)
     if new_gene != cfg.tar_gene:
         logger = logging.getLogger(__name__)
@@ -238,6 +346,254 @@ def normalize_tar_gene_from_pack(cfg, meta_matrix_pack: dict) -> None:
             f"（检测到 {convention} 命名规则）"
         )
         cfg.tar_gene = new_gene
+
+
+def normalize_gene_index(expr_df: pd.DataFrame) -> pd.DataFrame:
+    """去除基因索引的 Ensembl 版本号后缀，按表达均值去重"""
+    clean = expr_df.index.astype(str).str.replace(r'\.\d+$', '', regex=True)
+    if clean.equals(expr_df.index.astype(str)):
+        return expr_df
+    expr_df = expr_df.copy()
+    expr_df.index = clean
+    if expr_df.index.duplicated().any():
+        numeric_cols = expr_df.select_dtypes(include=["number"]).columns
+        expr_df["_mean_expr_"] = expr_df[numeric_cols].mean(axis=1)
+        expr_df = expr_df.sort_values("_mean_expr_", ascending=False)
+        expr_df = expr_df[~expr_df.index.duplicated(keep='first')]
+        expr_df = expr_df.drop(columns=["_mean_expr_"])
+    return expr_df
+
+
+def map_ensembl_to_symbol(expr_df: pd.DataFrame) -> pd.DataFrame:
+    """若行索引以 Ensembl ID 为主，通过 mygene 查询添加 SYMBOL 列"""
+    idx_str = expr_df.index.astype(str)
+    sample = idx_str[:min(20, len(idx_str))]
+    ensembl_re = re.compile(r'^ENS[A-Z]*G\d+')
+    if sum(1 for x in sample if ensembl_re.match(str(x))) < len(sample) * 0.8:
+        return expr_df
+
+    import mygene
+    logger = loggers.get_logger()
+    mg = mygene.MyGeneInfo()
+    # biothings_client 默认 timeout=None（永不超时），强制设 30s 防止网络卡死
+    import httpx as _httpx
+    mg._set_http_client()
+    mg.http_client.timeout = _httpx.Timeout(30.0)
+
+    # 抑制第三方库日志噪音
+    import logging as _logging
+    for name in ('biothings.client', 'httpx', 'urllib3'):
+        _logging.getLogger(name).setLevel(_logging.ERROR)
+
+    clean_ids = idx_str.str.replace(r'\.\d+$', '', regex=True)
+    unique_ids = clean_ids.unique().tolist()
+    total_batches = (len(unique_ids) + 999) // 1000
+
+    symbol_map = {}
+    batch_size = 1000
+    for i in range(0, len(unique_ids), batch_size):
+        batch = unique_ids[i:i + batch_size]
+        batch_no = i // batch_size + 1
+        logger.debug(f"查询基因符号 {batch_no}/{total_batches} ...")
+        try:
+            for r in mg.querymany(batch, scopes='ensembl.gene', fields='symbol', species='all'):
+                if 'symbol' in r:
+                    symbol_map[r['query']] = r['symbol']
+        except Exception:
+            logger.warning(f"mygene 查询超时或失败 (batch {batch_no}/{total_batches})，跳过")
+            continue
+
+    # 恢复日志级别
+    for name in ('biothings.client', 'httpx', 'urllib3'):
+        _logging.getLogger(name).setLevel(_logging.NOTSET)
+
+    if not symbol_map:
+        return expr_df
+
+    # 添加 SYMBOL 列，未命中则保留原始 Ensembl ID
+    expr_df = expr_df.copy()
+    expr_df['SYMBOL'] = clean_ids.map(symbol_map)
+    mapped = expr_df['SYMBOL'].notna()
+    logger.debug(
+        f"Ensembl→Symbol 映射完成: {mapped.sum()}/{len(expr_df)} 有符号, "
+        f"{len(expr_df) - mapped.sum()} 未命中"
+    )
+    # 未命中用原始 Ensembl ID 填充
+    missing = expr_df['SYMBOL'].isna()
+    expr_df.loc[missing, 'SYMBOL'] = idx_str[missing].astype(str)
+    return expr_df
+
+
+def map_mouse_genes_to_human_orthologs(mouse_genes, cache_dir=None, logger=None):
+    """通过 mygene HomoloGene 数据库将小鼠基因符号映射为人类同源基因符号。
+
+    两步查询：1) 小鼠符号 → HomoloGene 组 → 人类 Entrez Gene ID
+              2) 人类 Entrez Gene ID → 人类基因符号
+
+    Returns:
+        dict: {mouse_symbol: [human_symbol, ...]}，无同源基因的 key 不出现在结果中
+    """
+    import json
+    import mygene
+    import httpx as _httpx
+    import logging as _logging
+
+    if logger is None:
+        logger = loggers.get_logger()
+
+    if cache_dir is None:
+        from utils.paths import BASE_DIR
+        cache_dir = os.path.join(BASE_DIR, "data", "cache", "orthologs")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, "mouse_to_human.json")
+
+    # 加载缓存
+    cache = {}
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                cache = json.load(f)
+            cache.pop("_version", None)
+        except (json.JSONDecodeError, OSError):
+            logger.warning("同源基因缓存损坏，将重新构建")
+
+    # 过滤出缓存中不存在的基因
+    genes_to_query = [g for g in mouse_genes if str(g) not in cache]
+    if not genes_to_query:
+        logger.debug(f"所有 {len(mouse_genes)} 个小鼠基因已在同源缓存中")
+        return {g: cache[str(g)] for g in mouse_genes if str(g) in cache}
+
+    logger.info(f"正在查询 mygene 人鼠同源基因映射（{len(genes_to_query)} 个新基因）...")
+
+    mg = mygene.MyGeneInfo()
+    mg._set_http_client()
+    mg.http_client.timeout = _httpx.Timeout(30.0)
+    for name in ('biothings.client', 'httpx', 'urllib3'):
+        _logging.getLogger(name).setLevel(_logging.ERROR)
+
+    # Step 1: 小鼠基因符号 → HomoloGene 组 → 人类 Entrez Gene ID
+    mouse_to_human_ids = {}
+    batch_size = 1000
+    total_batches = (len(genes_to_query) + batch_size - 1) // batch_size
+    for i in range(0, len(genes_to_query), batch_size):
+        batch = genes_to_query[i:i + batch_size]
+        batch_no = i // batch_size + 1
+        try:
+            results = mg.querymany(batch, scopes='symbol', species='mouse', fields='homologene')
+            for r in results:
+                if 'homologene' not in r:
+                    continue
+                human_ids = [g[1] for g in r['homologene']['genes'] if g[0] == 9606]
+                if human_ids:
+                    mouse_to_human_ids[r['query']] = human_ids
+        except Exception:
+            logger.warning(f"mygene 同源查询失败 (batch {batch_no}/{total_batches})，跳过")
+
+    for name in ('biothings.client', 'httpx', 'urllib3'):
+        _logging.getLogger(name).setLevel(_logging.NOTSET)
+
+    if not mouse_to_human_ids:
+        logger.warning("mygene 同源查询无结果，将仅使用缓存中的同源映射")
+        return {g: cache[str(g)] for g in mouse_genes if str(g) in cache}
+
+    # Step 2: 人类 Entrez Gene ID → 基因符号
+    all_human_ids = list(set(hid for ids in mouse_to_human_ids.values() for hid in ids))
+    id_to_symbol = {}
+    for i in range(0, len(all_human_ids), batch_size):
+        batch = all_human_ids[i:i + batch_size]
+        try:
+            results = mg.querymany(batch, scopes='entrezgene', species='human', fields='symbol')
+            for r in results:
+                if 'symbol' in r:
+                    id_to_symbol[str(r['query'])] = r['symbol']
+        except Exception:
+            logger.warning(f"mygene 符号查询失败 (batch {i // batch_size + 1})，跳过")
+
+    # 构建映射并更新缓存
+    new_entries = 0
+    for mouse_gene, human_ids in mouse_to_human_ids.items():
+        symbols = []
+        for hid in human_ids:
+            sym = id_to_symbol.get(str(hid))
+            if sym:
+                symbols.append(sym)
+        if symbols:
+            # 去重（多个 Entrez ID 可能对应同一符号，如不同转录本）
+            symbols = list(dict.fromkeys(symbols))
+            cache[str(mouse_gene)] = symbols
+            new_entries += 1
+
+    # 持久化缓存
+    cache_out = {"_version": 1, **cache}
+    try:
+        with open(cache_file, 'w') as f:
+            json.dump(cache_out, f, ensure_ascii=False)
+    except OSError:
+        logger.debug("同源基因缓存写入失败（不影响分析）")
+
+    # 返回本次查询的所有基因的映射（含缓存命中的）
+    result = {}
+    for g in mouse_genes:
+        if str(g) in cache:
+            result[g] = cache[str(g)]
+
+    logger.debug(
+        f"同源基因映射完成: 新增 {new_entries} 条, 总计 {len(cache)} 条缓存, "
+        f"{len(result)}/{len(mouse_genes)} 个基因匹配到人类同源基因"
+    )
+    return result
+
+
+def apply_ortholog_conversion(expr_df, ortholog_map, logger=None):
+    """将表达矩阵 index 从小鼠基因符号替换为人类同源基因符号。
+
+    - 一对多同源（1 mouse → N human）：复制表达行
+    - 多对一同源（N mouse → 1 human）：groupby.mean() 合并
+    - 无同源基因（ortholog_map 中值为 [] 或不存在）：丢弃该行
+    """
+    if not ortholog_map:
+        return expr_df
+
+    if logger is None:
+        logger = loggers.get_logger()
+
+    expr_df = expr_df.copy()
+    original_index = expr_df.index.astype(str)
+
+    new_rows = []         # [(human_symbol, row_values_array)]
+    multi_hit_count = 0
+    dropped = []
+
+    for gene in original_index:
+        human_symbols = ortholog_map.get(gene)
+        if human_symbols is None or len(human_symbols) == 0:
+            dropped.append(gene)
+            continue
+        row_vals = expr_df.loc[gene].values
+        for hs in human_symbols:
+            new_rows.append((hs, row_vals))
+        if len(human_symbols) > 1:
+            multi_hit_count += 1
+
+    if dropped:
+        logger.debug(
+            f"无同源基因被移除 ({len(dropped)} 个): "
+            f"{dropped[:10]}{'...' if len(dropped) > 10 else ''}"
+        )
+
+    new_index = [r[0] for r in new_rows]
+    new_data = [r[1] for r in new_rows]
+    result = pd.DataFrame(new_data, index=new_index, columns=expr_df.columns)
+
+    # 多对一：按 index 合并（groupby mean）
+    if result.index.duplicated().any():
+        result = result.groupby(result.index).mean()
+
+    logger.info(
+        f"同源转换: {len(original_index)} 基因 → {len(result)} 基因 "
+        f"(一对多 {multi_hit_count}, 无同源移除 {len(dropped)})"
+    )
+    return result
 
 
 class Analyzer(ABC):
@@ -287,22 +643,24 @@ class Analyzer(ABC):
         pack_path = DataPacker.resolve_pack_path(data_dir, cfg.gse_id, cfg.analysis_mode)
 
         if cfg.analysis_mode == "enrich":
+            if data.meta_matrix_pack:
+                return DataAnalyzer(cfg, data)
             return FileAnalyzer(cfg)
 
-        if os.path.exists(pack_path) and not cfg.debug:
+        if os.path.exists(pack_path) and not cfg.force:
             cls._logger.info(f"发现数据包：{pack_path}，将从数据包中分析")
             return FileAnalyzer(cfg)
         elif data.meta_matrix_pack:
             cls._logger.info("开始从数据包中分析")
             return DataAnalyzer(cfg, data)
         else:
-            if cfg.debug and "1" not in str(cfg.process):
+            if cfg.force and "1" not in str(cfg.process):
                 hint = (
-                    "debug=true 会跳过数据包缓存读取，且 process 不含 '1' 跳过了数据下载，"
-                    "两者同时生效导致无数据可用。请设置 debug=false 以读取缓存，或在 process 中加入 '1' 以重新下载数据。"
+                    "force=true 会跳过数据包缓存读取，且 process 不含 '1' 跳过了数据下载，"
+                    "两者同时生效导致无数据可用。请设置 force=false 以读取缓存，或在 process 中加入 '1' 以重新下载数据。"
                 )
-            elif cfg.debug:
-                hint = "debug=true 已跳过数据包缓存读取，且未加载到内存数据。请设置 debug=false 后重试。"
+            elif cfg.force:
+                hint = "force=true 已跳过数据包缓存读取，且未加载到内存数据。请设置 force=false 后重试。"
             else:
                 hint = "未找到数据包缓存，请确保先执行阶段1（数据下载与清洗）。"
             raise RuntimeError(hint)
@@ -539,45 +897,10 @@ class Analyzer(ABC):
         return df
 
     def _get_sample_columns(self, df: pd.DataFrame) -> list:
-        """识别表达矩阵中的样本列，排除注释列和检测 p-value 列"""
-        sample_columns = []
-        for col in df.columns:
-            if isinstance(col, str):
-                lowered = col.lower()
-                if any(keyword in lowered for keyword in [
-                    'ensembl', 'entrezid', 'symbol', 'genename', 'probeid',
-                    'id_ref', 'targetid', 'gene', 'description'
-                ]):
-                    continue
-                if 'detection' in lowered and 'pval' in lowered:
-                    continue
-                sample_columns.append(col)
-            else:
-                sample_columns.append(col)
-        return sample_columns
+        return get_sample_columns(df)
 
-    def _rename_expr_columns_by_meta_order(self, expr_df: pd.DataFrame, full_meta: pd.DataFrame) -> pd.DataFrame:
-        """尝试按元数据顺序或元数据值将表达矩阵列名映射为 GSM 样本名"""
-        sample_columns = self._get_sample_columns(expr_df)
-        if len(sample_columns) == len(full_meta.index):
-            rename_map = {old: new for old, new in zip(sample_columns, full_meta.index.astype(str))}
-            expr_df = expr_df.rename(columns=rename_map)
-            return expr_df
-
-        # 如果列名与某个元数据字段值直接匹配，则基于值映射
-        for meta_col in ['geo_accession', 'title', 'source_name_ch1', 'label_ch1']:
-            if meta_col not in full_meta.columns:
-                continue
-            col_values = full_meta[meta_col].astype(str).tolist()
-            if set(sample_columns).issubset(set(col_values)):
-                rename_map = {}
-                for sample_col in sample_columns:
-                    idx = col_values.index(sample_col)
-                    rename_map[sample_col] = str(full_meta.index[idx])
-                expr_df = expr_df.rename(columns=rename_map)
-                return expr_df
-
-        return expr_df
+    def _rename_expr_columns_by_meta_order(self, expr_df: pd.DataFrame, full_meta: pd.DataFrame):
+        return rename_expr_columns_by_meta_order(expr_df, full_meta)
 
     def _clean_pack(self, raw_pack: dict) -> dict:
         """清洗整个数据包,处理其中的DataFrame矩阵并保留非矩阵元数据"""
@@ -722,12 +1045,12 @@ class DataAnalyzer(Analyzer):
     """基于直接读取DataFrame数据的分析流程"""
     def __init__(self, cfg: Config, data: DataHandler):
         super().__init__(cfg)
-        self.meta_matrix_pack = data.meta_matrix_pack
+        self._meta_matrix_pack = data.meta_matrix_pack
         self._logger.info("将从打包的pack中读取数据")
 
     def _load_data(self) -> dict:
-        self.meta_matrix_pack = self._clean_pack(self.meta_matrix_pack)
-        return self.meta_matrix_pack
+        self._meta_matrix_pack = self._clean_pack(self._meta_matrix_pack)
+        return self._meta_matrix_pack
 
 
 class FileAnalyzer(Analyzer):

@@ -46,7 +46,12 @@ class WgcnaStrategy:
             raise ValueError("未在数据包中找到表达矩阵，无法进行WGCNA数据准备")
 
         if meta_full is not None:
-            expr_df = self.analyzer._rename_expr_columns_by_meta_order(expr_df, meta_full)
+            expr_df, _renamed = self.analyzer._rename_expr_columns_by_meta_order(expr_df, meta_full)
+            if not _renamed:
+                raise ValueError(
+                    "列名未对齐为 GSM ID，无法进行 WGCNA 分析。"
+                    "表达矩阵列名与 meta_full 索引不匹配，请检查数据包"
+                )
 
         # 筛选前提取目标基因表达向量
         tar_expr = fetch_gene_vector(expr_df, self.cfg.tar_gene)
@@ -256,7 +261,7 @@ class WgcnaStrategy:
 
         for mode_key in ("differential", "highlow"):
             cache_path = os.path.join(data_dir, "pkl", f"{gse_id}_{mode_key}_summary.pkl")
-            if os.path.exists(cache_path) and not self.cfg.debug:
+            if os.path.exists(cache_path) and not self.cfg.force:
                 try:
                     cached = pd.read_pickle(cache_path)
                     if "padj" in cached.columns and "Gene" in cached.columns:

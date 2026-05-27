@@ -67,12 +67,12 @@ if [ -d "${BACKUP_DIR}" ]; then
     fi
 fi
 
-# 5. 生成帮助文本（help.yaml → help.txt）
+# 5. 生成帮助文本（help.yaml → help.md）
 echo "[→] 正在生成帮助文本..."
-conda run -n SGA python "${SGA_DIR}/conf/generate_help.py" 2>/dev/null || {
-    echo "[!] help.txt 生成失败，跳过。"
+conda run -n SGA python "${SGA_DIR}/scripts/generate_help.py" 2>/dev/null || {
+    echo "[!] help.md 生成失败，跳过。"
 }
-echo "[√] 帮助文本已生成: conf/help.txt"
+echo "[√] 帮助文本已生成: docs/help.md"
 
 # 6. 注册 sga 命令到 ~/.local/bin
 BIN_DIR="${HOME}/.local/bin"
@@ -89,7 +89,7 @@ set -euo pipefail
 
 SGA_DIR="SGA_DIR_PLACEHOLDER"
 CONF="${SGA_DIR}/conf/config.yaml"
-HELP_TXT="${SGA_DIR}/conf/help.txt"
+HELP_TXT="${SGA_DIR}/docs/help.md"
 CORE_KEYS="CORE_KEYS_PLACEHOLDER"
 
 _shared_keys="gse_id tar_gene multi_gene data_dir process debug storage"
@@ -110,7 +110,7 @@ case "${1:-}" in
         exit 0
         ;;
     help|--help|-h)
-        [ -f "$HELP_TXT" ] && cat "$HELP_TXT" || echo "help.txt 未找到，请重新运行 setup.sh。"
+        [ -f "$HELP_TXT" ] && cat "$HELP_TXT" || echo "help.md 未找到，请重新运行 setup.sh。"
         exit 0
         ;;
     config)

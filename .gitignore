@@ -3,11 +3,14 @@
 /.claude/
 /.venv/
 *.log
+*.swp
 /conf/config.yaml
 /conf/group_memory.yaml
+/conf/outputs/
 /data/
 /error_logs/
 /outputs/
+/docs/help.md
 /res/
 /script_grave/
 /oryx-build-commands.txt
@@ -222,3 +225,6 @@ __marimo__/
 
 # tree
 get_tree.py
+
+# 真实数据集成测试（依赖本地 data/ 目录）
+/tests/test_real_gse*.py
